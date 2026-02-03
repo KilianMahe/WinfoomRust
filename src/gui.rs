@@ -14,6 +14,7 @@ pub struct WinfoomApp {
     show_password: bool,
     runtime: tokio::runtime::Runtime,
     initialized: bool,
+    test_result: Arc<Mutex<Option<String>>>,
 }
 
 impl WinfoomApp {
@@ -27,6 +28,7 @@ impl WinfoomApp {
             show_password: false,
             runtime: tokio::runtime::Runtime::new().unwrap(),
             initialized: false,
+            test_result: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -83,6 +85,33 @@ impl WinfoomApp {
         self.is_running = false;
         self.status_message = "Proxy arrêté".to_string();
     }
+
+    async fn test_connection(url: &str, local_port: u16) -> Result<String, String> {
+        if url.is_empty() {
+            return Err("URL de test vide".to_string());
+        }
+
+        // Créer un client HTTP qui utilise le proxy local
+        let proxy_url = format!("http://127.0.0.1:{}", local_port);
+        let client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(&proxy_url).map_err(|e| format!("Erreur proxy: {}", e))?)
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("Erreur création client: {}", e))?;
+
+        match client.get(url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                Ok(format!(
+                    "Status: {}",
+                    status.as_u16(),
+                ))
+            }
+            Err(e) => {
+                Err(format!("Erreur requête: {}", e))
+            }
+        }
+    }
 }
 
 impl eframe::App for WinfoomApp {
@@ -93,6 +122,11 @@ impl eframe::App for WinfoomApp {
             if self.config.autostart {
                 self.start_proxy();
             }
+        }
+        
+        // Vérifier si le test a un résultat à afficher
+        if let Some(result) = self.test_result.lock().unwrap().take() {
+            self.status_message = result;
         }
         
         // Vérifier s'il y a un message d'erreur à afficher
@@ -232,7 +266,26 @@ impl eframe::App for WinfoomApp {
                 // Bouton de test
                 if ui.button("Tester la connexion").clicked() {
                     self.status_message = "Test en cours...".to_string();
-                    // TODO: Implémenter le test de connexion
+                    let test_url = self.config.proxy_test_url.clone();
+                    let local_port = self.config.local_port;
+                    let test_result = Arc::clone(&self.test_result);
+                    
+                    self.runtime.spawn(async move {
+                        match Self::test_connection(&test_url, local_port).await {
+                            Ok(info) => {
+                                let msg = format!("✓ Connexion réussie: {}", info);
+                                tracing::info!("{}", msg);
+                                let mut result = test_result.lock().unwrap();
+                                *result = Some(msg);
+                            }
+                            Err(e) => {
+                                let msg = format!("✗ Erreur: {}", e);
+                                tracing::error!("{}", msg);
+                                let mut result = test_result.lock().unwrap();
+                                *result = Some(msg);
+                            }
+                        }
+                    });
                 }
             });
 
