@@ -1,0 +1,34 @@
+# Logs et fichiers temporaires
+/target/
+**/*.rs.bk
+*.pdb
+
+# Configuration locale
+/config/local.toml
+
+# Logs
+*.log
+/logs/
+/out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Binaires
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Backup
+*.bak
+*.backup

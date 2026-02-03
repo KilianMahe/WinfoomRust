@@ -1,0 +1,75 @@
+[package]
+name = "winfoom-rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["WinfoomRust Team"]
+description = "Basic Proxy Facade for NTLM, SOCKS and Proxy Auto Config proxies - Rust implementation"
+license = "Apache-2.0"
+
+[[bin]]
+name = "winfoom"
+path = "src/main.rs"
+
+[dependencies]
+# Interface graphique
+eframe = "0.28"
+egui = "0.28"
+egui_extras = "0.28"
+
+# Serveur HTTP/Proxy
+tokio = { version = "1.38", features = ["full"] }
+hyper = { version = "1.4", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full", "tokio"] }
+http-body-util = "0.1"
+tower = { version = "0.4", features = ["util"] }
+tower-service = "0.3"
+
+# Client HTTP
+reqwest = { version = "0.12", features = ["json", "socks", "native-tls-alpn"] }
+
+# Authentification
+base64 = "0.22"
+
+# Sérialisation
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Utilitaires
+dirs = "5.0"
+
+# Async
+async-trait = "0.1"
+futures = "0.3"
+
+# Utilitaires
+anyhow = "1.0"
+thiserror = "1.0"
+url = "2.5"
+bytes = "1.6"
+once_cell = "1.19"
+
+# Configuration Windows
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authentication",
+    "Win32_System_Threading",
+    "Win32_Networking_WinSock",
+] }
+windows-sys = { version = "0.59", features = [
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Credentials",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
