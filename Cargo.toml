@@ -2,12 +2,12 @@
 name = "winfoom-rust"
 version = "0.5.0"
 edition = "2021"
-authors = ["WinfoomRust Team"]
+authors = ["Kilian Mahe"]
 description = "Basic Proxy Facade for NTLM, SOCKS and Proxy Auto Config proxies - Rust implementation"
 license = "Apache-2.0"
 
 [[bin]]
-name = "winfoom"
+name = "winfoomrust"
 path = "src/main.rs"
 
 [dependencies]
@@ -70,6 +70,10 @@ windows = { version = "0.58", features = [
 windows-sys = { version = "0.59", features = [
     "Win32_Security_Authentication_Identity",
     "Win32_Security_Credentials",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
 ] }
 
 [profile.release]
@@ -77,3 +81,6 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[build-dependencies]
+winres = "0.1"

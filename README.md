@@ -53,7 +53,7 @@ cd winfoom-rust
 # Compiler en mode release (optimisé)
 cargo build --release
 
-# L'exécutable sera dans target/release/winfoom.exe (Windows) ou target/release/winfoom (Linux/macOS)
+# L'exécutable sera dans target/release/winfoomrust.exe (Windows) ou target/release/winfoomrust (Linux/macOS)
 ```
 
 ## 📖 Utilisation
@@ -65,8 +65,8 @@ cargo build --release
 cargo run --release
 
 # Ou directement l'exécutable compilé
-./target/release/winfoom     # Linux/macOS
-.\target\release\winfoom.exe # Windows
+./target/release/winfoomrust     # Linux/macOS
+.\target\release\winfoomrust.exe # Windows
 ```
 
 ### Configuration via l'interface graphique

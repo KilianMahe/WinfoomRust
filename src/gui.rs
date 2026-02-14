@@ -1,13 +1,15 @@
 // Interface graphique avec egui
 use crate::config::{Config, ProxyType, HttpAuthProtocol};
 use crate::proxy::ProxyServer;
+use crate::tray::{TrayController, TrayEvent};
 use eframe::egui;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as TokioMutex;
 
-pub struct WinfoomApp {
+pub struct WinfoomrustApp {
     config: Config,
     proxy_server: Arc<TokioMutex<Option<ProxyServer>>>,
     is_running: bool,
@@ -17,9 +19,13 @@ pub struct WinfoomApp {
     runtime: tokio::runtime::Runtime,
     initialized: bool,
     test_result: Arc<Mutex<Option<String>>>,
+    _tray_controller: Option<TrayController>,
+    tray_events: Option<Receiver<TrayEvent>>,
+    tray_initialized: bool,
+    allow_exit: bool,
 }
 
-impl WinfoomApp {
+impl WinfoomrustApp {
     pub fn new(config: Config) -> Self {
         Self {
             config,
@@ -31,6 +37,10 @@ impl WinfoomApp {
             runtime: tokio::runtime::Runtime::new().unwrap(),
             initialized: false,
             test_result: Arc::new(Mutex::new(None)),
+            _tray_controller: None,
+            tray_events: None,
+            tray_initialized: false,
+            allow_exit: false,
         }
     }
 
@@ -171,11 +181,55 @@ impl WinfoomApp {
     }
 }
 
-impl eframe::App for WinfoomApp {
+impl eframe::App for WinfoomrustApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut restored_from_tray = false;
+
+        if !self.tray_initialized {
+            self.tray_initialized = true;
+            match TrayController::create(ctx.clone()) {
+                Ok((controller, rx)) => {
+                    self._tray_controller = Some(controller);
+                    self.tray_events = Some(rx);
+                }
+                Err(e) => {
+                    tracing::error!("{}", e);
+                    self.status_message = "Erreur initialisation tray".to_string();
+                }
+            }
+        }
+
+        if let Some(tray_events) = &self.tray_events {
+            while let Ok(event) = tray_events.try_recv() {
+                match event {
+                    TrayEvent::ShowWindow => {
+                        restored_from_tray = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                    TrayEvent::ExitApp => {
+                        self.allow_exit = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+        }
+
+        if !self.allow_exit && !restored_from_tray && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.status_message = "Application minimisée dans la zone de notification".to_string();
+        }
+
         // Au premier affichage, vérifier l'autostart
         if !self.initialized {
             self.initialized = true;
+            if self.config.start_minimized {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
             if self.config.autostart {
                 self.start_proxy();
             }
@@ -230,6 +284,7 @@ impl eframe::App for WinfoomApp {
                     ui.separator();
                     
                     if ui.button("Quitter").clicked() {
+                        self.allow_exit = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
@@ -560,6 +615,7 @@ impl eframe::App for WinfoomApp {
                     ui.add_space(10.0);
                     
                     ui.checkbox(&mut self.config.autostart, "Démarrage automatique du proxy");
+                    ui.checkbox(&mut self.config.start_minimized, "Démarrer l'application minimisée");
                     ui.checkbox(&mut self.config.autodetect, "Détection automatique des paramètres");
                 });
 

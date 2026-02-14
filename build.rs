@@ -1,7 +1,40 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "windows")]
+fn compile_windows_resources() {
+    let manifest_dir = match env::var("CARGO_MANIFEST_DIR") {
+        Ok(value) => PathBuf::from(value),
+        Err(e) => {
+            println!("cargo:warning=Impossible de lire CARGO_MANIFEST_DIR: {}", e);
+            return;
+        }
+    };
+
+    let icon_path = manifest_dir.join("assets").join("icon.ico");
+    if !icon_path.exists() {
+        println!(
+            "cargo:warning=assets/icon.ico introuvable; icône EXE Windows non embarquée"
+        );
+        return;
+    }
+
+    let mut res = winres::WindowsResource::new();
+    res.set_icon(icon_path.to_string_lossy().as_ref());
+
+    if let Err(e) = res.compile() {
+        println!("cargo:warning=Échec compilation ressource icône Windows: {}", e);
+    }
+}
+
 fn target_profile_dir() -> Option<PathBuf> {
+    if let Ok(out_dir) = env::var("OUT_DIR") {
+        let out = PathBuf::from(out_dir);
+        if let Some(profile_dir) = out.ancestors().nth(3) {
+            return Some(profile_dir.to_path_buf());
+        }
+    }
+
     let profile = env::var("PROFILE").ok()?;
 
     if let Ok(target_dir) = env::var("CARGO_TARGET_DIR") {
@@ -50,10 +83,57 @@ fn copy_runtime_dll(dll_candidates: &[PathBuf]) {
     }
 }
 
+fn copy_tray_icon() {
+    let manifest_dir = match env::var("CARGO_MANIFEST_DIR") {
+        Ok(value) => PathBuf::from(value),
+        Err(_) => return,
+    };
+
+    let source_icon = manifest_dir.join("assets").join("icon.ico");
+    if !source_icon.exists() {
+        println!(
+            "cargo:warning=assets/icon.ico introuvable; l'icône tray personnalisée ne sera pas copiée"
+        );
+        return;
+    }
+
+    let Some(profile_dir) = target_profile_dir() else {
+        println!(
+            "cargo:warning=Impossible de déterminer le dossier cible pour copier icon.ico"
+        );
+        return;
+    };
+
+    if let Err(e) = std::fs::create_dir_all(&profile_dir) {
+        println!(
+            "cargo:warning=Impossible de créer le dossier cible {}: {}",
+            profile_dir.display(),
+            e
+        );
+        return;
+    }
+
+    let out_icon = profile_dir.join("icon.ico");
+    match std::fs::copy(&source_icon, &out_icon) {
+        Ok(_) => println!("cargo:warning=icon.ico copié vers {}", out_icon.display()),
+        Err(e) => println!(
+            "cargo:warning=Échec de la copie de icon.ico vers {}: {}",
+            out_icon.display(),
+            e
+        ),
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=LIBPROXY_LIB_DIR");
     println!("cargo:rerun-if-env-changed=LIBPROXY_DLL_DIR");
     println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
+    println!("cargo:rerun-if-changed=assets/icon.ico");
+
+    if cfg!(target_os = "windows") {
+        compile_windows_resources();
+        copy_tray_icon();
+    }
 
     if cfg!(target_os = "windows") {
         let mut candidates: Vec<String> = Vec::new();

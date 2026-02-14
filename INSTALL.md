@@ -43,8 +43,8 @@ cargo build --release
 ```
 
 Les exécutables seront dans:
-- Mode debug: `target/debug/winfoom` (ou `.exe` sur Windows)
-- Mode release: `target/release/winfoom` (ou `.exe` sur Windows)
+- Mode debug: `target/debug/winfoomrust` (ou `.exe` sur Windows)
+- Mode release: `target/release/winfoomrust` (ou `.exe` sur Windows)
 
 ## Exécution
 
@@ -53,8 +53,8 @@ Les exécutables seront dans:
 cargo run --release
 
 # Ou exécuter le binaire compilé
-./target/release/winfoom      # Linux/macOS
-.\target\release\winfoom.exe  # Windows
+./target/release/winfoomrust      # Linux/macOS
+.\target\release\winfoomrust.exe  # Windows
 ```
 
 ## Configuration

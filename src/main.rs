@@ -6,6 +6,7 @@ mod proxy;
 mod gui;
 mod auth;
 mod pac;
+mod tray;
 
 use eframe::egui;
 
@@ -83,15 +84,25 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Démarrage de WinfoomRust");
     tracing::info!("Dossier de logs: {:?}", log_dir);
     tracing::info!("Rétention logs: {} fichiers max", MAX_LOG_FILES);
+
+    let window_icon = std::fs::read("assets/icon.png")
+        .ok()
+        .and_then(|bytes| eframe::icon_data::from_png_bytes(&bytes).ok());
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([800.0, 600.0])
+        .with_min_inner_size([700.0, 520.0])
+        .with_clamp_size_to_monitor_size(true)
+        .with_resizable(true)
+        .with_title("WinfoomRust - Proxy Facade");
+
+    if let Some(icon) = window_icon {
+        viewport = viewport.with_icon(icon);
+    }
     
     // Options de l'interface graphique
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([800.0, 600.0])
-            .with_min_inner_size([700.0, 520.0])
-            .with_clamp_size_to_monitor_size(true)
-            .with_resizable(true)
-            .with_title("WinfoomRust - Proxy Facade"),
+        viewport,
         ..Default::default()
     };
 
@@ -99,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
     match eframe::run_native(
         "WinfoomRust",
         options,
-        Box::new(|_cc| Ok(Box::new(gui::WinfoomApp::new(config)))),
+        Box::new(|_cc| Ok(Box::new(gui::WinfoomrustApp::new(config)))),
     ) {
         Ok(_) => Ok(()),
         Err(e) => Err(anyhow::anyhow!("Erreur eframe: {:?}", e)),

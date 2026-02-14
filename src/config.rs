@@ -66,6 +66,7 @@ pub struct Config {
     
     // Auto-start
     pub autostart: bool,
+    pub start_minimized: bool,
     pub autodetect: bool,
     
     // API
@@ -95,6 +96,7 @@ impl Default for Config {
             pac_cache_ttl_seconds: 300,
             pac_stale_ttl_seconds: 900,
             autostart: false,
+            start_minimized: false,
             autodetect: false,
             api_port: 3128,
             log_level: "info".to_string(),
