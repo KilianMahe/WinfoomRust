@@ -1,7 +1,9 @@
 // Serveur proxy HTTP
 use crate::config::Config;
+use crate::config::ProxyType;
 use crate::auth::AuthHandler;
 use anyhow::Result;
+use reqwest::Client;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -48,6 +50,8 @@ impl ProxyServer {
                 match listener.accept().await {
                     Ok((stream, client_addr)) => {
                         tracing::debug!("Nouvelle connexion de {}", client_addr);
+                        let config = Arc::clone(&config);
+                        let auth_handler = Arc::clone(&auth_handler);
                         
                         tokio::spawn(async move {
                             use tokio::io::{AsyncReadExt};
@@ -143,46 +147,57 @@ impl ProxyServer {
                                         } else {
                                             format!("http://{}", uri)
                                         };
-                                        
-                                        // Créer le client et faire la requête
-                                        if let Ok(client) = reqwest::Client::builder()
-                                            .timeout(std::time::Duration::from_secs(30))
-                                            .build()
-                                        {
-                                            let response = match method {
-                                                "GET" => client.get(&url).send().await,
-                                                "HEAD" => client.head(&url).send().await,
-                                                "POST" => client.post(&url).send().await,
-                                                _ => {
-                                                    tracing::warn!("Méthode HTTP non supportée: {}", method);
-                                                    return;
-                                                }
-                                            };
-                                            
-                                            if let Ok(resp) = response {
-                                                // Construire la réponse HTTP
-                                                let status = resp.status();
-                                                let mut response_str = format!("HTTP/1.1 {}\r\n", status);
-                                                
-                                                // Ajouter les headers importants
-                                                for (name, value) in resp.headers() {
-                                                    if let Ok(val) = value.to_str() {
-                                                        response_str.push_str(&format!("{}: {}\r\n", name, val));
-                                                    }
-                                                }
-                                                response_str.push_str("\r\n");
-                                                
-                                                // Envoyer les headers
-                                                let _ = stream.write_all(response_str.as_bytes()).await;
-                                                
-                                                // Envoyer le body
-                                                if let Ok(body) = resp.bytes().await {
-                                                    let _ = stream.write_all(&body).await;
-                                                }
-                                                
+
+                                        let request_config = config.lock().await.clone();
+                                        let client = match create_forward_client(&request_config, auth_handler.as_ref()).await {
+                                            Ok(client) => client,
+                                            Err(e) => {
+                                                tracing::error!("Erreur création client proxy HTTP: {}", e);
+                                                let body = format!("Proxy configuration error: {}", e);
+                                                let response = format!(
+                                                    "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+                                                    body.len(),
+                                                    body
+                                                );
+                                                let _ = stream.write_all(response.as_bytes()).await;
                                                 let _ = stream.flush().await;
-                                                tracing::debug!("Réponse HTTP envoyée: {} {}", status, uri);
+                                                return;
                                             }
+                                        };
+
+                                        let response = match method {
+                                            "GET" => client.get(&url).send().await,
+                                            "HEAD" => client.head(&url).send().await,
+                                            "POST" => client.post(&url).send().await,
+                                            _ => {
+                                                tracing::warn!("Méthode HTTP non supportée: {}", method);
+                                                return;
+                                            }
+                                        };
+                                        
+                                        if let Ok(resp) = response {
+                                            // Construire la réponse HTTP
+                                            let status = resp.status();
+                                            let mut response_str = format!("HTTP/1.1 {}\r\n", status);
+                                            
+                                            // Ajouter les headers importants
+                                            for (name, value) in resp.headers() {
+                                                if let Ok(val) = value.to_str() {
+                                                    response_str.push_str(&format!("{}: {}\r\n", name, val));
+                                                }
+                                            }
+                                            response_str.push_str("\r\n");
+                                            
+                                            // Envoyer les headers
+                                            let _ = stream.write_all(response_str.as_bytes()).await;
+                                            
+                                            // Envoyer le body
+                                            if let Ok(body) = resp.bytes().await {
+                                                let _ = stream.write_all(&body).await;
+                                            }
+                                            
+                                            let _ = stream.flush().await;
+                                            tracing::debug!("Réponse HTTP envoyée: {} {}", status, uri);
                                         }
                                     }
                                     return;
@@ -235,6 +250,43 @@ impl ProxyServer {
         Ok(())
     }
 
+}
+
+async fn create_forward_client(config: &Config, auth_handler: &AuthHandler) -> Result<Client> {
+    if let Some(proxy_url) = build_upstream_proxy_url(config)? {
+        tracing::debug!("Utilisation proxy upstream: {}", proxy_url);
+        return auth_handler.create_authenticated_client(&proxy_url).await;
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(config.socket_timeout))
+        .connect_timeout(std::time::Duration::from_secs(config.connect_timeout))
+        .build()?;
+
+    Ok(client)
+}
+
+fn build_upstream_proxy_url(config: &Config) -> Result<Option<String>> {
+    match config.proxy_type {
+        ProxyType::DIRECT => Ok(None),
+        ProxyType::PAC => Err(anyhow::anyhow!(
+            "Mode PAC non supporté pour le forwarding HTTP dans cette version"
+        )),
+        ProxyType::HTTP | ProxyType::SOCKS4 | ProxyType::SOCKS5 => {
+            if config.proxy_host.trim().is_empty() {
+                return Err(anyhow::anyhow!("proxy_host est vide"));
+            }
+
+            let scheme = match config.proxy_type {
+                ProxyType::HTTP => "http",
+                ProxyType::SOCKS4 => "socks4",
+                ProxyType::SOCKS5 => "socks5h",
+                _ => unreachable!(),
+            };
+
+            Ok(Some(format!("{}://{}:{}", scheme, config.proxy_host, config.proxy_port)))
+        }
+    }
 }
 
 // Extraire host:port de la ligne CONNECT

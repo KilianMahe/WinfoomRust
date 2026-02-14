@@ -38,6 +38,14 @@ impl WinfoomApp {
         let config = self.config.clone();
         let proxy_server = Arc::clone(&self.proxy_server);
         let error_msg = Arc::clone(&self.error_message);
+        let unsupported_ntlm_sspi =
+            (self.config.use_current_credentials
+                || !self.config.proxy_username.is_empty()
+                || !self.config.proxy_password.is_empty())
+                && matches!(
+                    self.config.http_auth_protocol,
+                    HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+                );
         
         self.runtime.spawn(async move {
             let mut server = ProxyServer::new(config.clone());
@@ -70,7 +78,17 @@ impl WinfoomApp {
         });
         
         self.is_running = true;
-        self.status_message = format!("Proxy démarré sur le port {}", self.config.local_port);
+        if unsupported_ntlm_sspi {
+            self.status_message = format!(
+                "Proxy démarré sur le port {} — NTLM/SSPI non supporté actuellement",
+                self.config.local_port
+            );
+            tracing::warn!(
+                "Mode NTLM/SSPI détecté: handshake complet non implémenté"
+            );
+        } else {
+            self.status_message = format!("Proxy démarré sur le port {}", self.config.local_port);
+        }
     }
 
     fn stop_proxy(&mut self) {
