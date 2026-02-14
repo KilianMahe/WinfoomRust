@@ -1,223 +1,251 @@
 # WinfoomRust
 
-**Proxy Facade pour NTLM, SOCKS et Proxy Auto Config (PAC) - Implémentation en Rust**
+Proxy facade HTTP(S) en Rust pour travailler avec des proxies HTTP, SOCKS et PAC, avec interface graphique desktop.
 
-Version actuelle: **0.5**
+Version actuelle: **0.5.0**
 
-WinfoomRust est une réimplémentation moderne en Rust de [Winfoom](https://github.com/ecovaci/winfoom), un serveur proxy HTTP(s) facade qui permet aux applications de s'authentifier à travers différents types de proxies sans avoir à gérer le handshake d'authentification.
+---
 
-## ✨ Fonctionnalités
+## Sommaire
 
-- 🔐 **Support de multiples types de proxy:**
-   - HTTP avec authentification Basic
-  - SOCKS4 et SOCKS5 (avec ou sans authentification)
-  - Proxy Auto Config (PAC)
-  - Mode DIRECT (sans proxy)
+- [Aperçu](#aperçu)
+- [Fonctionnalités](#fonctionnalités)
+- [Quick Start](#quick-start)
+- [Installation (dépendances natives)](#installation-dépendances-natives)
+- [Utilisation](#utilisation)
+- [Configuration](#configuration)
+- [Logs](#logs)
+- [Dépannage](#dépannage)
+- [Architecture](#architecture)
+- [Roadmap](#roadmap)
+- [Contribution](#contribution)
+- [Licence](#licence)
 
-- 🖥️ **Interface graphique moderne** avec egui
-- ⚡ **Performance optimale** grâce à Rust et Tokio
-- 🪟 **Support Windows natif** avec authentification système
-- 🔧 **Configuration facile** via fichier TOML
-- 📊 **Logging détaillé** pour le débogage
-- 📁 **Accès rapide aux logs** via le menu "Aide" → "Ouvrir le dossier des logs"
-- 🔐 **Authentification configurée** (mode explicite et erreurs claires sur modes non supportés)
-- 🚀 **Démarrage automatique** optionnel
+## Aperçu
 
-## 📋 Prérequis
+WinfoomRust est une réimplémentation moderne de [Winfoom](https://github.com/ecovaci/winfoom).  
+L’application expose un proxy local (par défaut `127.0.0.1:3129`) et relaie les requêtes vers un proxy upstream en gérant les scénarios d’authentification et de connectivité.
 
-- **Rust 1.75+** (ou utilisez les binaires précompilés)
+## Fonctionnalités
+
+- Types de proxy upstream:
+  - `HTTP`
+  - `SOCKS4` / `SOCKS5`
+  - `PAC`
+  - `DIRECT`
+- Auth HTTP:
+  - `BASIC` manuel: supporté
+  - `NTLM` / `KERBEROS` + `use_current_credentials = true` (Windows): supporté
+  - `NTLM` / `KERBEROS` avec credentials manuels: non supporté
+- Interface graphique `egui`
+- Zone de notification Windows (tray):
+  - clic gauche: restaurer la fenêtre
+  - clic droit: menu `Ouvrir` / `Quitter`
+- Rotation quotidienne des logs + rétention
+- Packaging Windows:
+  - copie de `libproxy.dll` à côté de l’exécutable
+  - copie de `icon.ico` à côté de l’exécutable
+  - icône EXE embarquée (ressource Windows)
+
+## Quick Start
+
+### Prérequis
+
+- Rust `1.75+`
 - Windows, Linux ou macOS
 
-### Installation de Rust
-
-Si Rust n'est pas installé sur votre système:
-
-**Windows:**
-```powershell
-# Télécharger et exécuter rustup-init.exe depuis https://rustup.rs/
-# Ou via winget:
-winget install Rustlang.Rustup
-```
-
-**Linux/macOS:**
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-## 🚀 Compilation
+### Build
 
 ```bash
-# Cloner ou naviguer vers le dossier
-cd winfoom-rust
-
-# Compiler en mode release (optimisé)
 cargo build --release
-
-# L'exécutable sera dans target/release/winfoomrust.exe (Windows) ou target/release/winfoomrust (Linux/macOS)
 ```
 
-## 📖 Utilisation
+Binaire généré:
 
-### Lancer l'application
+- Windows: `target/release/winfoomrust.exe`
+- Linux/macOS: `target/release/winfoomrust`
+
+Sous Windows, le build release copie également:
+
+- `target/release/libproxy.dll`
+- `target/release/icon.ico`
+
+### Run
 
 ```bash
-# Depuis le dossier du projet
+# via cargo
 cargo run --release
 
-# Ou directement l'exécutable compilé
-./target/release/winfoomrust     # Linux/macOS
+# ou exécution directe
+./target/release/winfoomrust      # Linux/macOS
 .\target\release\winfoomrust.exe # Windows
 ```
 
-### Configuration via l'interface graphique
+## Installation (dépendances natives)
 
-1. **Sélectionner le type de proxy:**
-   - HTTP (pour NTLM, Basic, ou autres proxies HTTP)
-   - SOCKS4 ou SOCKS5
-   - PAC (Proxy Auto-Config)
-   - DIRECT (pas de proxy)
+### Rust
 
-2. **Configurer le proxy upstream:**
-   - Hôte et port du proxy
-   - Authentification Basic manuelle (si nécessaire)
-   - Option Windows current credentials (mode explicite)
+Si Rust n’est pas installé:
 
-3. **Configurer le port local:**
-   - Par défaut: 3129
-   - Modifier selon vos besoins
+- Windows:
 
-4. **Démarrer le proxy:**
-   - Cliquer sur "▶ Démarrer le proxy"
-   - Configurer vos applications pour utiliser `127.0.0.1:3129`
+```powershell
+winget install Rustlang.Rustup
+```
 
-5. **Sauvegarder la configuration:**
-   - Menu "Fichier" → "💾 Sauvegarder configuration"
+- Linux/macOS:
 
-### Fichier de configuration
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
 
-Le fichier de configuration est automatiquement créé à:
-- **Windows:** `%APPDATA%\winfoom-rust\config.toml`
-- **Linux/macOS:** `~/.config/winfoom-rust/config.toml`
+### libproxy (important)
 
-Exemple de configuration:
+Le projet dépend de `libproxy` pour la résolution PAC.
+
+#### Windows
+
+Le build recherche ces artefacts:
+
+- `proxy.lib` (ou `libproxy.lib`)
+- `libproxy.dll` (ou `proxy.dll`)
+
+Installation recommandée avec `vcpkg`:
+
+```powershell
+git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
+& "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat"
+& "$env:USERPROFILE\vcpkg\vcpkg.exe" install libproxy:x64-windows
+```
+
+Variables optionnelles si l’auto-détection échoue:
+
+```powershell
+$env:VCPKG_ROOT = "$env:USERPROFILE\vcpkg"
+$env:LIBPROXY_LIB_DIR = "C:\path\to\lib"
+$env:LIBPROXY_DLL_DIR = "C:\path\to\bin"
+```
+
+#### Linux/macOS
+
+Installer la bibliothèque système `libproxy` (et headers dev) avant compilation.
+
+## Utilisation
+
+1. Lancer l’application.
+2. Choisir un type de proxy (`HTTP`, `SOCKS4`, `SOCKS5`, `PAC`, `DIRECT`).
+3. Renseigner le proxy upstream (hôte/port).
+4. Configurer l’auth si nécessaire.
+5. Démarrer le proxy local.
+6. Configurer les applications clientes sur `127.0.0.1:3129`.
+
+### Tray Windows
+
+- Fermer avec `X` masque l’app dans le tray.
+- Clic gauche tray: restaure la fenêtre.
+- Clic droit tray: menu `Ouvrir` / `Quitter`.
+
+## Configuration
+
+Le fichier est sauvegardé automatiquement:
+
+- Windows: `%APPDATA%\winfoom-rust\config.toml`
+- Linux/macOS: `~/.config/winfoom-rust/config.toml`
+
+Exemple:
 
 ```toml
 proxy_type = "HTTP"
 proxy_host = "proxy.company.com"
 proxy_port = 8080
 local_port = 3129
-use_current_credentials = true  # Windows uniquement
+
+use_current_credentials = true
 proxy_username = ""
 proxy_password = ""
-proxy_test_url = "https://example.com"
+http_auth_protocol = "NTLM"
+
+proxy_pac_file_location = ""
+pac_cache_ttl_seconds = 300
+pac_stale_ttl_seconds = 900
+
 socket_timeout = 60
 connect_timeout = 20
 blacklist_timeout = 30
+
 autostart = false
+start_minimized = false
 autodetect = false
-api_port = 9999
+
+api_port = 3128
 log_level = "info"
 ```
 
-## 🔧 Configuration du navigateur
+## Logs
 
-### Firefox
+- Accès rapide: menu `Aide` → `Ouvrir le dossier des logs`
+- Rotation: quotidienne
+- Rétention par défaut: 14 fichiers
+- Niveaux: `trace`, `debug`, `info`, `warn`, `error`
 
-1. Ouvrir les Préférences
-2. Aller dans "Général" → "Paramètres réseau"
-3. Configurer:
-   - Proxy HTTP: `127.0.0.1` Port: `3129`
-   - Cocher "Utiliser ce proxy pour tous les protocoles"
+Mode debug:
 
-### Chrome/Edge
-
-1. Paramètres système → Proxy
-2. Configurer:
-   - Proxy HTTP: `127.0.0.1:3129`
-
-## 📝 Logs
-
-Les logs sont disponibles dans:
-- **Dossier de logs local** (ouverture rapide via "Aide" → "Ouvrir le dossier des logs")
-- **Console** pendant l'exécution
-- Niveau de log configurable: `trace`, `debug`, `info`, `warn`, `error`
-
-Pour activer le mode debug:
 ```bash
 RUST_LOG=debug cargo run --release
 ```
 
-## 🏗️ Architecture
+## Dépannage
 
+### `proxy.lib introuvable` (Windows)
+
+- Vérifier `libproxy:x64-windows` dans `vcpkg`
+- Vérifier `VCPKG_ROOT`
+- Sinon définir `LIBPROXY_LIB_DIR` et `LIBPROXY_DLL_DIR`
+
+### Le proxy local ne démarre pas
+
+- Vérifier que le port local n’est pas déjà utilisé
+- Vérifier les logs
+
+### Erreurs d’authentification
+
+- Vérifier le protocole (`BASIC`, `NTLM`, `KERBEROS`)
+- Vérifier le mode credentials (`use_current_credentials`)
+- Rappel: NTLM/Kerberos manuel n’est pas supporté
+
+## Architecture
+
+```text
+src/
+├── main.rs      # Entrée app + options fenêtre
+├── gui.rs       # Interface graphique
+├── tray.rs      # Tray Windows natif
+├── proxy.rs     # Serveur proxy local + routage upstream
+├── auth.rs      # Auth HTTP / SSPI
+├── pac.rs       # Résolution PAC + cache
+└── config.rs    # Chargement/sauvegarde config
 ```
-winfoom-rust/
-├── src/
-│   ├── main.rs          # Point d'entrée
-│   ├── config.rs        # Gestion de la configuration
-│   ├── proxy.rs         # Serveur proxy HTTP
-│   ├── auth.rs          # Authentification NTLM/Basic
-│   ├── pac.rs           # Support PAC
-│   └── gui.rs           # Interface graphique egui
-├── Cargo.toml           # Dépendances Rust
-└── README.md
-```
 
-## 🛠️ Technologies utilisées
+## Roadmap
 
-- **[Tokio](https://tokio.rs/)**: Runtime asynchrone
-- **[Hyper](https://hyper.rs/)**: Serveur HTTP
-- **[egui](https://www.egui.rs/)**: Interface graphique
-- **[reqwest](https://github.com/seanmonstar/reqwest)**: Client HTTP
-- **[serde](https://serde.rs/)**: Sérialisation/désérialisation
-- **[libproxy](https://libproxy.github.io/libproxy/)**: Résolution PAC / intégration proxy système
+- Durcir la compatibilité multi-environnements proxy
+- Étendre la couverture de tests
+- Améliorer la distribution binaire (packaging)
 
-## 🐛 Dépannage
+## Contribution
 
-### Le proxy ne démarre pas
-- Vérifier que le port local n'est pas déjà utilisé
-- Vérifier les logs pour plus de détails
+Les contributions sont bienvenues via issues et pull requests.
 
-### Erreur d'authentification
-- Vérifier les credentials
-- Vérifier le protocole d'authentification configuré
-- Les modes NTLM/Kerberos (SSPI) sont explicitement signalés comme non supportés tant que le handshake complet n'est pas implémenté
+## Licence
 
-### Impossible de se connecter au proxy upstream
-- Vérifier l'hôte et le port du proxy
-- Tester la connexion avec `ping` ou `telnet`
-- Vérifier les timeouts dans les options avancées
+Apache-2.0 (voir [LICENSE](LICENSE)).
 
-## 🤝 Contribution
+## Remerciements
 
-Les contributions sont les bienvenues! N'hésitez pas à:
-- Ouvrir des issues pour les bugs ou suggestions
-- Soumettre des Pull Requests
-- Améliorer la documentation
-
-## 📄 Licence
-
-Apache License 2.0 - Voir le fichier LICENSE
-
-## 🙏 Remerciements
-
-Ce projet est inspiré de [Winfoom](https://github.com/ecovaci/winfoom) par Eugen Covaci.
-
-Cette application a été développée avec assistance IA.
-
-## 🔗 Liens utiles
-
-- [Documentation Rust](https://doc.rust-lang.org/)
-- [Winfoom original](https://github.com/ecovaci/winfoom)
-- [egui documentation](https://docs.rs/egui/)
-- [Tokio documentation](https://docs.rs/tokio/)
-
-## 📮 Support
-
-Pour toute question ou problème:
-- Ouvrir une issue sur GitHub
-- Consulter la documentation
-- Vérifier les logs pour plus de détails
+- Ce projet est inspiré de [Winfoom](https://github.com/ecovaci/winfoom).
+- Ce projet a été développé avec utilisation de l’IA.
 
 ---
 
-**Note:** Le support PAC est en place. Le support NTLM/Kerberos complet (handshake SSPI) n'est pas encore implémenté.
+Projet inspiré de [Winfoom](https://github.com/ecovaci/winfoom).
