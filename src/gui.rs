@@ -257,8 +257,15 @@ impl eframe::App for WinfoomApp {
         });
 
         // Panneau latéral pour les contrôles
+        let screen_width = ctx.input(|i| i.screen_rect().width());
+        let side_default_width = (screen_width * 0.30).clamp(220.0, 360.0);
+        let side_max_width = (screen_width * 0.55).clamp(300.0, 520.0);
+
         egui::SidePanel::left("control_panel")
-            .min_width(250.0)
+            .resizable(true)
+            .default_width(side_default_width)
+            .min_width(200.0)
+            .max_width(side_max_width)
             .show(ctx, |ui| {
                 ui.heading("Contrôles");
                 ui.separator();
@@ -549,7 +556,7 @@ impl eframe::App for WinfoomApp {
                             .speed(1)
                             .range(60..=3600));
                     });
-                    
+
                     ui.add_space(10.0);
                     
                     ui.checkbox(&mut self.config.autostart, "Démarrage automatique du proxy");

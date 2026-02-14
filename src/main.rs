@@ -88,6 +88,9 @@ async fn main() -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([800.0, 600.0])
+            .with_min_inner_size([700.0, 520.0])
+            .with_clamp_size_to_monitor_size(true)
+            .with_resizable(true)
             .with_title("WinfoomRust - Proxy Facade"),
         ..Default::default()
     };
