@@ -2,12 +2,14 @@
 
 **Proxy Facade pour NTLM, SOCKS et Proxy Auto Config (PAC) - Implémentation en Rust**
 
+Version actuelle: **0.5**
+
 WinfoomRust est une réimplémentation moderne en Rust de [Winfoom](https://github.com/ecovaci/winfoom), un serveur proxy HTTP(s) facade qui permet aux applications de s'authentifier à travers différents types de proxies sans avoir à gérer le handshake d'authentification.
 
 ## ✨ Fonctionnalités
 
 - 🔐 **Support de multiples types de proxy:**
-  - HTTP avec authentification NTLM/Basic
+   - HTTP avec authentification Basic
   - SOCKS4 et SOCKS5 (avec ou sans authentification)
   - Proxy Auto Config (PAC)
   - Mode DIRECT (sans proxy)
@@ -17,6 +19,8 @@ WinfoomRust est une réimplémentation moderne en Rust de [Winfoom](https://gith
 - 🪟 **Support Windows natif** avec authentification système
 - 🔧 **Configuration facile** via fichier TOML
 - 📊 **Logging détaillé** pour le débogage
+- 📁 **Accès rapide aux logs** via le menu "Aide" → "Ouvrir le dossier des logs"
+- 🔐 **Authentification configurée** (mode explicite et erreurs claires sur modes non supportés)
 - 🚀 **Démarrage automatique** optionnel
 
 ## 📋 Prérequis
@@ -75,8 +79,8 @@ cargo run --release
 
 2. **Configurer le proxy upstream:**
    - Hôte et port du proxy
-   - Credentials (si nécessaire)
-   - Sur Windows: option pour utiliser les credentials système
+   - Authentification Basic manuelle (si nécessaire)
+   - Option Windows current credentials (mode explicite)
 
 3. **Configurer le port local:**
    - Par défaut: 3129
@@ -134,6 +138,7 @@ log_level = "info"
 ## 📝 Logs
 
 Les logs sont disponibles dans:
+- **Dossier de logs local** (ouverture rapide via "Aide" → "Ouvrir le dossier des logs")
 - **Console** pendant l'exécution
 - Niveau de log configurable: `trace`, `debug`, `info`, `warn`, `error`
 
@@ -164,6 +169,7 @@ winfoom-rust/
 - **[egui](https://www.egui.rs/)**: Interface graphique
 - **[reqwest](https://github.com/seanmonstar/reqwest)**: Client HTTP
 - **[serde](https://serde.rs/)**: Sérialisation/désérialisation
+- **[libproxy](https://libproxy.github.io/libproxy/)**: Résolution PAC / intégration proxy système
 
 ## 🐛 Dépannage
 
@@ -173,8 +179,8 @@ winfoom-rust/
 
 ### Erreur d'authentification
 - Vérifier les credentials
-- Sur Windows, essayer "Utiliser les credentials Windows actuels"
-- Vérifier que le protocole d'authentification est correct (NTLM/Basic)
+- Vérifier le protocole d'authentification configuré
+- Les modes NTLM/Kerberos (SSPI) sont explicitement signalés comme non supportés tant que le handshake complet n'est pas implémenté
 
 ### Impossible de se connecter au proxy upstream
 - Vérifier l'hôte et le port du proxy
@@ -196,6 +202,8 @@ Apache License 2.0 - Voir le fichier LICENSE
 
 Ce projet est inspiré de [Winfoom](https://github.com/ecovaci/winfoom) par Eugen Covaci.
 
+Cette application a été développée avec assistance IA.
+
 ## 🔗 Liens utiles
 
 - [Documentation Rust](https://doc.rust-lang.org/)
@@ -212,4 +220,4 @@ Pour toute question ou problème:
 
 ---
 
-**Note:** Ce projet est en développement actif. Certaines fonctionnalités avancées (comme le support complet NTLM/Kerberos et PAC) sont en cours d'implémentation.
+**Note:** Le support PAC est en place. Le support NTLM/Kerberos complet (handshake SSPI) n'est pas encore implémenté.

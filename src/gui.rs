@@ -250,7 +250,7 @@ impl eframe::App for WinfoomApp {
                     }
 
                     if ui.button("À propos").clicked() {
-                        self.status_message = "WinfoomRust v0.1.0 - Proxy Facade".to_string();
+                        self.status_message = "WinfoomRust v0.5.0 - Proxy Facade".to_string();
                         ui.close_menu();
                     }
                 });

@@ -1,5 +1,7 @@
 # WinfoomRust - Guide de Compilation et d'Utilisation
 
+Version actuelle: **0.5**
+
 ## Installation de Rust (si nécessaire)
 
 ### Windows
@@ -72,6 +74,7 @@ L'application créera automatiquement un fichier de configuration à:
 3. **Configurer le port local** (par défaut: 3129)
 4. **Démarrer le proxy** en cliquant sur "▶ Démarrer le proxy"
 5. **Configurer vos applications** pour utiliser `127.0.0.1:3129` comme proxy
+6. **Accéder aux logs** via le menu **Aide** → **Ouvrir le dossier des logs**
 
 ## Exemples de configuration
 
@@ -84,6 +87,8 @@ proxy_port = 8080
 local_port = 3129
 use_current_credentials = true
 ```
+
+> Ce mode est explicite dans l'application. Tant que le handshake NTLM/SSPI complet n'est pas implémenté, il est signalé comme non supporté.
 
 ### Proxy HTTP avec authentification manuelle
 
@@ -119,6 +124,8 @@ local_port = 3129
 
 L'application téléchargera automatiquement toutes les dépendances Rust lors de la première compilation. Cela peut prendre quelques minutes.
 
+Une bibliothèque dédiée est également utilisée pour la gestion proxy/PAC pendant l'installation des dépendances: `libproxy`.
+
 Si vous rencontrez des problèmes de compilation, essayez:
 ```bash
 cargo clean
@@ -143,8 +150,9 @@ cargo build --release
 
 ### Erreurs d'authentification
 - Vérifier les credentials
-- Sur Windows, essayer avec "use_current_credentials = true"
-- Vérifier que le protocole d'authentification est correct
+- Sur Windows, essayer avec `use_current_credentials = true`
+- Vérifier que le protocole configuré correspond au mode attendu
+- Si NTLM/Kerberos est configuré, l'application affiche explicitement que ce mode n'est pas encore supporté (handshake complet requis)
 
 ## Support et contribution
 
@@ -152,6 +160,10 @@ Pour toute question ou problème:
 - Consulter le README.md principal
 - Vérifier les logs de l'application
 - Ouvrir une issue sur GitHub
+
+## Note de développement
+
+Cette application a été développée avec assistance IA.
 
 ## Performances
 
