@@ -2,6 +2,8 @@
 use crate::config::{Config, ProxyType, HttpAuthProtocol};
 use crate::proxy::ProxyServer;
 use eframe::egui;
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as TokioMutex;
 
@@ -112,6 +114,44 @@ impl WinfoomApp {
             }
         }
     }
+
+    fn logs_directory() -> PathBuf {
+        let app_data = dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."));
+        app_data.join("WinfoomRust")
+    }
+
+    fn open_logs_directory() -> Result<(), String> {
+        let logs_dir = Self::logs_directory();
+        std::fs::create_dir_all(&logs_dir)
+            .map_err(|e| format!("Impossible de créer le dossier de logs: {}", e))?;
+
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("explorer")
+                .arg(&logs_dir)
+                .spawn()
+                .map_err(|e| format!("Impossible d'ouvrir le dossier de logs: {}", e))?;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open")
+                .arg(&logs_dir)
+                .spawn()
+                .map_err(|e| format!("Impossible d'ouvrir le dossier de logs: {}", e))?;
+        }
+
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            Command::new("xdg-open")
+                .arg(&logs_dir)
+                .spawn()
+                .map_err(|e| format!("Impossible d'ouvrir le dossier de logs: {}", e))?;
+        }
+
+        Ok(())
+    }
 }
 
 impl eframe::App for WinfoomApp {
@@ -178,6 +218,19 @@ impl eframe::App for WinfoomApp {
                 });
 
                 ui.menu_button("Aide", |ui| {
+                    if ui.button("Ouvrir le dossier des logs").clicked() {
+                        match Self::open_logs_directory() {
+                            Ok(_) => {
+                                self.status_message = "Ouverture du dossier des logs...".to_string();
+                            }
+                            Err(e) => {
+                                self.status_message = format!("Erreur: {}", e);
+                                tracing::error!("{}", e);
+                            }
+                        }
+                        ui.close_menu();
+                    }
+
                     if ui.button("À propos").clicked() {
                         self.status_message = "WinfoomRust v0.1.0 - Proxy Facade".to_string();
                         ui.close_menu();
