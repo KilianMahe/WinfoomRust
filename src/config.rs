@@ -18,29 +18,6 @@ impl Default for ProxyType {
     }
 }
 
-impl ProxyType {
-    pub fn as_str(&self) -> &str {
-        match self {
-            ProxyType::HTTP => "HTTP",
-            ProxyType::SOCKS4 => "SOCKS4",
-            ProxyType::SOCKS5 => "SOCKS5",
-            ProxyType::PAC => "PAC",
-            ProxyType::DIRECT => "DIRECT",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s.to_uppercase().as_str() {
-            "HTTP" => ProxyType::HTTP,
-            "SOCKS4" => ProxyType::SOCKS4,
-            "SOCKS5" => ProxyType::SOCKS5,
-            "PAC" => ProxyType::PAC,
-            "DIRECT" => ProxyType::DIRECT,
-            _ => ProxyType::HTTP,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HttpAuthProtocol {
     NTLM,
@@ -55,6 +32,7 @@ impl Default for HttpAuthProtocol {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     // Configuration du proxy
     pub proxy_type: ProxyType,
@@ -81,6 +59,10 @@ pub struct Config {
     pub socket_timeout: u64,
     pub connect_timeout: u64,
     pub blacklist_timeout: u64,
+
+    // Cache PAC (en secondes)
+    pub pac_cache_ttl_seconds: u64,
+    pub pac_stale_ttl_seconds: u64,
     
     // Auto-start
     pub autostart: bool,
@@ -110,6 +92,8 @@ impl Default for Config {
             socket_timeout: 60,
             connect_timeout: 20,
             blacklist_timeout: 30,
+            pac_cache_ttl_seconds: 120,
+            pac_stale_ttl_seconds: 900,
             autostart: false,
             autodetect: false,
             api_port: 9999,

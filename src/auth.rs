@@ -1,9 +1,11 @@
 // Gestion de l'authentification
 use crate::config::Config;
 use crate::config::HttpAuthProtocol;
+use crate::config::ProxyType;
 use anyhow::Result;
 use base64::Engine;
-use reqwest::Client;
+use reqwest::header::{HeaderMap, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION};
+use reqwest::{Client, Response, StatusCode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyAuthMode {
@@ -44,17 +46,21 @@ impl AuthHandler {
                     )
                 }
                 ProxyAuthMode::WindowsCurrentCredentials => {
-                    #[cfg(windows)]
-                    {
-                        let (username, password) = self.get_windows_credentials()?;
-                        p.basic_auth(&username, &password)
-                    }
+                    if self.requires_sspi_handshake() {
+                        p
+                    } else {
+                        #[cfg(windows)]
+                        {
+                            let (username, password) = self.get_windows_credentials()?;
+                            p.basic_auth(&username, &password)
+                        }
 
-                    #[cfg(not(windows))]
-                    {
-                        anyhow::bail!(
-                            "Mode WindowsCurrentCredentials demandé sur un système non-Windows"
-                        );
+                        #[cfg(not(windows))]
+                        {
+                            anyhow::bail!(
+                                "Mode WindowsCurrentCredentials demandé sur un système non-Windows"
+                            );
+                        }
                     }
                 }
                 ProxyAuthMode::UnsupportedNtlmSspi => {
@@ -90,13 +96,110 @@ impl AuthHandler {
         }
     }
 
+    pub async fn send_authenticated_request(
+        &self,
+        client: &Client,
+        method: &str,
+        url: &str,
+    ) -> Result<Response> {
+        if self.requires_sspi_handshake() {
+            #[cfg(windows)]
+            {
+                return self.send_request_with_sspi(client, method, url).await;
+            }
+
+            #[cfg(not(windows))]
+            {
+                anyhow::bail!("Handshake SSPI non disponible hors Windows");
+            }
+        }
+
+        self.send_plain_request(client, method, url, None).await
+    }
+
+    pub fn requires_sspi_handshake(&self) -> bool {
+        cfg!(windows)
+            && matches!(self.config.proxy_type, ProxyType::HTTP)
+            && self.config.use_current_credentials
+            && matches!(
+                self.config.http_auth_protocol,
+                HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+            )
+    }
+
+    async fn send_plain_request(
+        &self,
+        client: &Client,
+        method: &str,
+        url: &str,
+        proxy_auth_header: Option<&str>,
+    ) -> Result<Response> {
+        let mut request = match method {
+            "GET" => client.get(url),
+            "HEAD" => client.head(url),
+            "POST" => client.post(url),
+            _ => anyhow::bail!("Méthode HTTP non supportée: {}", method),
+        };
+
+        if let Some(value) = proxy_auth_header {
+            request = request.header(PROXY_AUTHORIZATION, value);
+        }
+
+        Ok(request.send().await?)
+    }
+
+    #[cfg(windows)]
+    async fn send_request_with_sspi(
+        &self,
+        client: &Client,
+        method: &str,
+        url: &str,
+    ) -> Result<Response> {
+        let mut sspi = WindowsSspiContext::new(self.config.http_auth_protocol.clone(), &self.config.proxy_host)?;
+        let mut proxy_auth_header: Option<String> = None;
+
+        for _ in 0..6 {
+            let response = self
+                .send_plain_request(client, method, url, proxy_auth_header.as_deref())
+                .await?;
+
+            if response.status() != StatusCode::PROXY_AUTHENTICATION_REQUIRED {
+                return Ok(response);
+            }
+
+            let challenge = extract_proxy_auth_challenge(response.headers(), sspi.header_scheme());
+            let output_token = sspi.next_token(challenge.as_deref())?;
+            proxy_auth_header = Some(format!(
+                "{} {}",
+                sspi.header_scheme(),
+                base64::engine::general_purpose::STANDARD.encode(output_token)
+            ));
+        }
+
+        anyhow::bail!(
+            "Échec du handshake SSPI après plusieurs tentatives (407 persistant)"
+        )
+    }
+
     pub fn auth_mode(&self) -> ProxyAuthMode {
+        if self.config.use_current_credentials
+            && matches!(
+                self.config.http_auth_protocol,
+                HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+            )
+        {
+            return ProxyAuthMode::WindowsCurrentCredentials;
+        }
+
         let auth_requested = self.config.use_current_credentials
             || !self.config.proxy_username.is_empty()
             || !self.config.proxy_password.is_empty();
 
         if auth_requested
-            && matches!(self.config.http_auth_protocol, HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS)
+            && matches!(
+                self.config.http_auth_protocol,
+                HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+            )
         {
             return ProxyAuthMode::UnsupportedNtlmSspi;
         }
@@ -145,77 +248,205 @@ impl AuthHandler {
     }
 }
 
-// Authentification NTLM
-pub struct NtlmAuthenticator {
-    username: String,
-    password: String,
-    domain: Option<String>,
-}
+fn extract_proxy_auth_challenge(headers: &HeaderMap, scheme: &str) -> Option<Vec<u8>> {
+    let scheme_lower = scheme.to_ascii_lowercase();
 
-impl NtlmAuthenticator {
-    pub fn new(username: String, password: String) -> Self {
-        let (domain, user) = if username.contains('\\') {
-            let parts: Vec<&str> = username.split('\\').collect();
-            (Some(parts[0].to_string()), parts[1].to_string())
-        } else {
-            (None, username)
+    for value in headers.get_all(PROXY_AUTHENTICATE).iter() {
+        let Ok(value_str) = value.to_str() else {
+            continue;
         };
 
-        NtlmAuthenticator {
-            username: user,
-            password,
-            domain,
+        for part in value_str.split(',') {
+            let trimmed = part.trim();
+            let lower = trimmed.to_ascii_lowercase();
+
+            if lower == scheme_lower {
+                return None;
+            }
+
+            if lower.starts_with(&(scheme_lower.clone() + " ")) {
+                let token = trimmed[scheme.len()..].trim();
+                if token.is_empty() {
+                    return None;
+                }
+
+                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(token) {
+                    return Some(decoded);
+                }
+            }
         }
     }
 
-    pub fn create_type1_message(&self) -> Result<String> {
-        let domain = self.domain.clone().unwrap_or_default().to_uppercase();
-        let workstation = std::env::var("COMPUTERNAME").unwrap_or_default().to_uppercase();
+    None
+}
 
-        let domain_bytes = domain.as_bytes();
-        let workstation_bytes = workstation.as_bytes();
+#[cfg(windows)]
+struct WindowsSspiContext {
+    credential: windows_sys::Win32::Security::Credentials::SecHandle,
+    context: Option<windows_sys::Win32::Security::Credentials::SecHandle>,
+    target_name: Vec<u16>,
+    scheme: &'static str,
+}
 
-        let payload_offset = 32u32;
-        let workstation_offset = payload_offset;
-        let domain_offset = payload_offset + workstation_bytes.len() as u32;
+#[cfg(windows)]
+impl WindowsSspiContext {
+    fn new(protocol: HttpAuthProtocol, proxy_host: &str) -> Result<Self> {
+        let (package, scheme) = match protocol {
+            HttpAuthProtocol::NTLM => ("NTLM", "NTLM"),
+            HttpAuthProtocol::KERBEROS => ("Negotiate", "Negotiate"),
+            HttpAuthProtocol::BASIC => anyhow::bail!("SSPI non requis pour BASIC"),
+        };
 
-        let flags: u32 =
-            0x0000_0001 | // NEGOTIATE_UNICODE
-            0x0000_0200 | // NEGOTIATE_NTLM
-            0x0000_1000 | // NEGOTIATE_OEM_DOMAIN_SUPPLIED
-            0x0000_2000 | // NEGOTIATE_OEM_WORKSTATION_SUPPLIED
-            0x0008_0000 | // NEGOTIATE_ALWAYS_SIGN
-            0x2000_0000;  // NEGOTIATE_128
-
-        let mut msg = Vec::with_capacity(32 + workstation_bytes.len() + domain_bytes.len());
-        msg.extend_from_slice(b"NTLMSSP\0");
-        msg.extend_from_slice(&1u32.to_le_bytes());
-        msg.extend_from_slice(&flags.to_le_bytes());
-
-        // Security buffer Domain (len, alloc, offset)
-        msg.extend_from_slice(&(domain_bytes.len() as u16).to_le_bytes());
-        msg.extend_from_slice(&(domain_bytes.len() as u16).to_le_bytes());
-        msg.extend_from_slice(&domain_offset.to_le_bytes());
-
-        // Security buffer Workstation (len, alloc, offset)
-        msg.extend_from_slice(&(workstation_bytes.len() as u16).to_le_bytes());
-        msg.extend_from_slice(&(workstation_bytes.len() as u16).to_le_bytes());
-        msg.extend_from_slice(&workstation_offset.to_le_bytes());
-
-        // Payload: Workstation puis Domain
-        msg.extend_from_slice(workstation_bytes);
-        msg.extend_from_slice(domain_bytes);
-
-        Ok(base64::engine::general_purpose::STANDARD.encode(msg))
-    }
-
-    pub fn create_type3_message(&self, type2_message: &str) -> Result<String> {
-        if type2_message.trim().is_empty() {
-            anyhow::bail!("Message NTLM Type 2 vide");
+        if proxy_host.trim().is_empty() {
+            anyhow::bail!("proxy_host vide pour handshake SSPI");
         }
 
-        anyhow::bail!(
-            "NTLM Type 3 n'est pas encore supporté dans cette version (challenge-response NTLM complet requis)"
-        )
+        let target_spn = format!("HTTP/{}", proxy_host);
+        let mut target_name: Vec<u16> = target_spn.encode_utf16().collect();
+        target_name.push(0);
+
+        let mut package_name: Vec<u16> = package.encode_utf16().collect();
+        package_name.push(0);
+
+        let mut credential = windows_sys::Win32::Security::Credentials::SecHandle {
+            dwLower: 0,
+            dwUpper: 0,
+        };
+        let mut expiry: i64 = 0;
+
+        let status = unsafe {
+            windows_sys::Win32::Security::Authentication::Identity::AcquireCredentialsHandleW(
+                std::ptr::null_mut(),
+                package_name.as_mut_ptr(),
+                windows_sys::Win32::Security::Authentication::Identity::SECPKG_CRED_OUTBOUND,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+                &mut credential,
+                &mut expiry,
+            )
+        };
+
+        if status != 0 {
+            anyhow::bail!("AcquireCredentialsHandleW a échoué: 0x{:08X}", status as u32);
+        }
+
+        Ok(Self {
+            credential,
+            context: None,
+            target_name,
+            scheme,
+        })
+    }
+
+    fn header_scheme(&self) -> &'static str {
+        self.scheme
+    }
+
+    fn next_token(&mut self, challenge: Option<&[u8]>) -> Result<Vec<u8>> {
+        let mut output_buffer = windows_sys::Win32::Security::Authentication::Identity::SecBuffer {
+            cbBuffer: 0,
+            BufferType: windows_sys::Win32::Security::Authentication::Identity::SECBUFFER_TOKEN,
+            pvBuffer: std::ptr::null_mut(),
+        };
+        let mut output_desc = windows_sys::Win32::Security::Authentication::Identity::SecBufferDesc {
+            ulVersion: windows_sys::Win32::Security::Authentication::Identity::SECBUFFER_VERSION,
+            cBuffers: 1,
+            pBuffers: &mut output_buffer,
+        };
+
+        let mut input_buffer_opt = challenge.map(|token| {
+            windows_sys::Win32::Security::Authentication::Identity::SecBuffer {
+                cbBuffer: token.len() as u32,
+                BufferType: windows_sys::Win32::Security::Authentication::Identity::SECBUFFER_TOKEN,
+                pvBuffer: token.as_ptr() as *mut _,
+            }
+        });
+        let mut input_desc_opt = input_buffer_opt.as_mut().map(|input_buffer| {
+            windows_sys::Win32::Security::Authentication::Identity::SecBufferDesc {
+                ulVersion: windows_sys::Win32::Security::Authentication::Identity::SECBUFFER_VERSION,
+                cBuffers: 1,
+                pBuffers: input_buffer,
+            }
+        });
+
+        let mut new_context = windows_sys::Win32::Security::Credentials::SecHandle {
+            dwLower: 0,
+            dwUpper: 0,
+        };
+        let mut attrs: u32 = 0;
+        let mut expiry: i64 = 0;
+
+        let status = unsafe {
+            windows_sys::Win32::Security::Authentication::Identity::InitializeSecurityContextW(
+                &mut self.credential,
+                self.context
+                    .as_mut()
+                    .map(|ctx| ctx as *mut _)
+                    .unwrap_or(std::ptr::null_mut()),
+                self.target_name.as_mut_ptr(),
+                windows_sys::Win32::Security::Authentication::Identity::ISC_REQ_ALLOCATE_MEMORY
+                    | windows_sys::Win32::Security::Authentication::Identity::ISC_REQ_CONFIDENTIALITY
+                    | windows_sys::Win32::Security::Authentication::Identity::ISC_REQ_CONNECTION,
+                0,
+                windows_sys::Win32::Security::Authentication::Identity::SECURITY_NATIVE_DREP,
+                input_desc_opt
+                    .as_mut()
+                    .map(|desc| desc as *mut _)
+                    .unwrap_or(std::ptr::null_mut()),
+                0,
+                &mut new_context,
+                &mut output_desc,
+                &mut attrs,
+                &mut expiry,
+            )
+        };
+
+        if self.context.is_none() {
+            self.context = Some(new_context);
+        } else if let Some(existing) = self.context.as_mut() {
+            *existing = new_context;
+        }
+
+        let continue_needed =
+            status == windows_sys::Win32::Foundation::SEC_I_CONTINUE_NEEDED;
+        if status != 0 && !continue_needed {
+            anyhow::bail!("InitializeSecurityContextW a échoué: 0x{:08X}", status as u32);
+        }
+
+        let token = if output_buffer.cbBuffer > 0 && !output_buffer.pvBuffer.is_null() {
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    output_buffer.pvBuffer as *const u8,
+                    output_buffer.cbBuffer as usize,
+                )
+            };
+            let out = bytes.to_vec();
+            unsafe {
+                windows_sys::Win32::Security::Authentication::Identity::FreeContextBuffer(output_buffer.pvBuffer);
+            }
+            out
+        } else {
+            Vec::new()
+        };
+
+        Ok(token)
     }
 }
+
+#[cfg(windows)]
+impl Drop for WindowsSspiContext {
+    fn drop(&mut self) {
+        if let Some(mut context) = self.context.take() {
+            unsafe {
+                windows_sys::Win32::Security::Authentication::Identity::DeleteSecurityContext(&mut context);
+            }
+        }
+
+        unsafe {
+            windows_sys::Win32::Security::Authentication::Identity::FreeCredentialsHandle(&mut self.credential);
+        }
+    }
+}
+

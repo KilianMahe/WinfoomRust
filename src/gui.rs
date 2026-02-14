@@ -39,9 +39,8 @@ impl WinfoomApp {
         let proxy_server = Arc::clone(&self.proxy_server);
         let error_msg = Arc::clone(&self.error_message);
         let unsupported_ntlm_sspi =
-            (self.config.use_current_credentials
-                || !self.config.proxy_username.is_empty()
-                || !self.config.proxy_password.is_empty())
+            !self.config.use_current_credentials
+                && (!self.config.proxy_username.is_empty() || !self.config.proxy_password.is_empty())
                 && matches!(
                     self.config.http_auth_protocol,
                     HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
@@ -535,6 +534,20 @@ impl eframe::App for WinfoomApp {
                         ui.add(egui::DragValue::new(&mut self.config.blacklist_timeout)
                             .speed(1)
                             .range(10..=300));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("PAC cache frais (s):");
+                        ui.add(egui::DragValue::new(&mut self.config.pac_cache_ttl_seconds)
+                            .speed(1)
+                            .range(30..=600));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("PAC stale max (s):");
+                        ui.add(egui::DragValue::new(&mut self.config.pac_stale_ttl_seconds)
+                            .speed(1)
+                            .range(60..=3600));
                     });
                     
                     ui.add_space(10.0);

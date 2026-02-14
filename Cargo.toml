@@ -26,6 +26,7 @@ tower-service = "0.3"
 
 # Client HTTP
 reqwest = { version = "0.12", features = ["json", "socks", "native-tls-alpn"] }
+tokio-socks = "0.5"
 
 # Gestion des proxies
 libproxy = "0.1"
