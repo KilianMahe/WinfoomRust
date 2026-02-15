@@ -1,5 +1,5 @@
 // Main entry point - lance l'interface graphique
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
 mod proxy;
@@ -9,6 +9,7 @@ mod pac;
 mod tray;
 
 use eframe::egui;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 const LOG_DIR_NAME: &str = "WinfoomRust";
 const LOG_FILE_PREFIX: &str = "winfoom.log";
@@ -54,6 +55,7 @@ fn cleanup_old_logs(log_dir: &std::path::Path) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+
     // Charger la configuration
     let config = config::Config::load().unwrap_or_default();
 
@@ -76,8 +78,14 @@ async fn main() -> anyhow::Result<()> {
         .or_else(|_| tracing_subscriber::EnvFilter::try_new(config.log_level.clone()))
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     
+    #[cfg(debug_assertions)]
+    let log_writer = std::io::stdout.and(non_blocking);
+
+    #[cfg(not(debug_assertions))]
+    let log_writer = non_blocking;
+
     tracing_subscriber::fmt()
-        .with_writer(non_blocking)
+        .with_writer(log_writer)
         .with_env_filter(env_filter)
         .init();
 

@@ -31,6 +31,7 @@ impl ProxyServer {
     pub fn new(config: Config) -> Self {
         let pac_resolver = if matches!(config.proxy_type, ProxyType::PAC) {
             match PacResolver::shared(
+                &config.proxy_pac_file_location,
                 config.pac_cache_ttl_seconds,
                 config.pac_stale_ttl_seconds,
             ) {
@@ -222,15 +223,16 @@ impl ProxyServer {
                                         };
 
                                         let request_config = config.lock().await.clone();
-                                        let client = match create_forward_client(
+                                        let proxy_candidates = match build_upstream_proxy_candidates(
                                             &request_config,
-                                            auth_handler.as_ref(),
                                             pac_resolver.clone(),
                                             &url,
-                                        ).await {
-                                            Ok(client) => client,
+                                        )
+                                        .await
+                                        {
+                                            Ok(candidates) => candidates,
                                             Err(e) => {
-                                                tracing::error!("Erreur création client proxy HTTP: {}", e);
+                                                tracing::error!("Erreur résolution des proxies upstream HTTP: {}", e);
                                                 let body = format!("Proxy configuration error: {}", e);
                                                 let response = format!(
                                                     "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
@@ -243,18 +245,62 @@ impl ProxyServer {
                                             }
                                         };
 
-                                        let response = match auth_handler
-                                            .send_authenticated_request(&client, method, &url)
+                                        let mut response = None;
+                                        let mut last_error: Option<String> = None;
+
+                                        for (index, proxy_candidate) in proxy_candidates.iter().enumerate() {
+                                            let total = proxy_candidates.len();
+                                            let candidate_label = proxy_candidate.as_deref().unwrap_or("DIRECT");
+
+                                            tracing::debug!(
+                                                "Tentative HTTP {}/{} pour {} via {}",
+                                                index + 1,
+                                                total,
+                                                url,
+                                                candidate_label
+                                            );
+
+                                            let client = match create_forward_client_for_proxy(
+                                                &request_config,
+                                                auth_handler.as_ref(),
+                                                proxy_candidate.as_deref(),
+                                            )
                                             .await
-                                        {
-                                            Ok(resp) => Ok(resp),
-                                            Err(e) => {
-                                                tracing::error!("Erreur requête HTTP proxy: {}", e);
-                                                Err(e)
+                                            {
+                                                Ok(client) => client,
+                                                Err(e) => {
+                                                    let err_msg = format!(
+                                                        "Création client impossible via {}: {}",
+                                                        candidate_label,
+                                                        e
+                                                    );
+                                                    tracing::warn!("{}", err_msg);
+                                                    last_error = Some(err_msg);
+                                                    continue;
+                                                }
+                                            };
+
+                                            match auth_handler
+                                                .send_authenticated_request(&client, method, &url)
+                                                .await
+                                            {
+                                                Ok(resp) => {
+                                                    response = Some(resp);
+                                                    break;
+                                                }
+                                                Err(e) => {
+                                                    let err_msg = format!(
+                                                        "Requête HTTP échouée via {}: {}",
+                                                        candidate_label,
+                                                        e
+                                                    );
+                                                    tracing::warn!("{}", err_msg);
+                                                    last_error = Some(err_msg);
+                                                }
                                             }
-                                        };
+                                        }
                                         
-                                        if let Ok(resp) = response {
+                                        if let Some(resp) = response {
                                             // Construire la réponse HTTP
                                             let status = resp.status();
                                             let mut response_str = format!("HTTP/1.1 {}\r\n", status);
@@ -277,6 +323,18 @@ impl ProxyServer {
                                             
                                             let _ = stream.flush().await;
                                             tracing::debug!("Réponse HTTP envoyée: {} {}", status, uri);
+                                        } else {
+                                            let body = format!(
+                                                "HTTP upstream error: {}",
+                                                last_error.unwrap_or_else(|| "Aucune tentative proxy n'a abouti".to_string())
+                                            );
+                                            let response = format!(
+                                                "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+                                                body.len(),
+                                                body
+                                            );
+                                            let _ = stream.write_all(response.as_bytes()).await;
+                                            let _ = stream.flush().await;
                                         }
                                     }
                                     return;
@@ -331,13 +389,12 @@ impl ProxyServer {
 
 }
 
-async fn create_forward_client(
+async fn create_forward_client_for_proxy(
     config: &Config,
     auth_handler: &AuthHandler,
-    pac_resolver: Option<Arc<PacResolver>>,
-    request_url: &str,
+    proxy_url: Option<&str>,
 ) -> Result<Client> {
-    if let Some(proxy_url) = build_upstream_proxy_url(config, pac_resolver, request_url).await? {
+    if let Some(proxy_url) = proxy_url {
         tracing::debug!("Utilisation proxy upstream: {}", proxy_url);
         return auth_handler.create_authenticated_client(&proxy_url).await;
     }
@@ -350,25 +407,63 @@ async fn create_forward_client(
     Ok(client)
 }
 
-async fn build_upstream_proxy_url(
+async fn build_upstream_proxy_candidates(
     config: &Config,
     pac_resolver: Option<Arc<PacResolver>>,
     request_url: &str,
-) -> Result<Option<String>> {
+) -> Result<Vec<Option<String>>> {
     match config.proxy_type {
-        ProxyType::DIRECT => Ok(None),
+        ProxyType::DIRECT => {
+            tracing::debug!(
+                "Mode DIRECT pour URL {} -> aucun proxy upstream",
+                request_url
+            );
+            Ok(vec![None])
+        }
         ProxyType::PAC => {
             let resolver = pac_resolver
                 .ok_or_else(|| anyhow::anyhow!("PAC activé mais PacResolver non initialisé"))?;
             let proxies = resolver.resolve(request_url).await?;
+            let mut candidates: Vec<Option<String>> = Vec::new();
 
             for pac_entry in proxies {
                 if let Some(proxy_url) = map_pac_entry_to_proxy_url(&pac_entry) {
-                    return Ok(Some(proxy_url));
+                    tracing::debug!(
+                        "PAC sélection pour URL {} -> entrée '{}' -> upstream {}",
+                        request_url,
+                        pac_entry,
+                        proxy_url
+                    );
+                    candidates.push(Some(proxy_url));
+                    continue;
+                }
+
+                if pac_entry.trim().eq_ignore_ascii_case("DIRECT")
+                    || pac_entry.trim().eq_ignore_ascii_case("direct://")
+                {
+                    tracing::debug!(
+                        "PAC sélection pour URL {} -> entrée 'DIRECT'",
+                        request_url
+                    );
+                    candidates.push(None);
+                } else {
+                    tracing::debug!(
+                        "PAC entrée ignorée pour URL {}: '{}'",
+                        request_url,
+                        pac_entry
+                    );
                 }
             }
 
-            Ok(None)
+            if candidates.is_empty() {
+                tracing::debug!(
+                    "PAC ne retourne aucun proxy exploitable pour URL {} -> DIRECT",
+                    request_url
+                );
+                return Ok(vec![None]);
+            }
+
+            Ok(candidates)
         }
         ProxyType::HTTP | ProxyType::SOCKS4 | ProxyType::SOCKS5 => {
             if config.proxy_host.trim().is_empty() {
@@ -382,15 +477,32 @@ async fn build_upstream_proxy_url(
                 _ => unreachable!(),
             };
 
-            Ok(Some(format!("{}://{}:{}", scheme, config.proxy_host, config.proxy_port)))
+            let upstream = format!("{}://{}:{}", scheme, config.proxy_host, config.proxy_port);
+            tracing::debug!(
+                "Proxy statique sélectionné pour URL {} -> {}",
+                request_url,
+                upstream
+            );
+            Ok(vec![Some(upstream)])
         }
     }
 }
 
 fn map_pac_entry_to_proxy_url(entry: &str) -> Option<String> {
     let trimmed = entry.trim();
-    if trimmed.eq_ignore_ascii_case("DIRECT") {
+    if trimmed.eq_ignore_ascii_case("DIRECT") || trimmed.eq_ignore_ascii_case("direct://") {
         return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("socks://")
+        || lower.starts_with("socks4://")
+        || lower.starts_with("socks5://")
+        || lower.starts_with("socks5h://")
+    {
+        return Some(trimmed.to_string());
     }
 
     let mut parts = trimmed.split_whitespace();
@@ -420,35 +532,60 @@ async fn establish_connect_tunnel(
 ) -> Result<tokio::net::TcpStream> {
     let connect_url = format!("https://{}/", target_host_port);
 
-    let proxy_url = build_upstream_proxy_url(config, pac_resolver, &connect_url).await?;
-    match proxy_url {
-        None => {
-            let stream = tokio::net::TcpStream::connect(target_host_port).await?;
-            Ok(stream)
-        }
-        Some(url) => {
-            if let Some(upstream) = url.strip_prefix("http://") {
-                return connect_via_http_upstream(config, auth_handler, upstream, target_host_port).await;
-            }
+    let proxy_candidates = build_upstream_proxy_candidates(config, pac_resolver, &connect_url).await?;
+    let total = proxy_candidates.len();
+    let mut last_error: Option<anyhow::Error> = None;
 
-            if let Some(upstream) = url.strip_prefix("socks4://") {
-                return connect_via_socks_upstream(config, "socks4", upstream, target_host_port).await;
-            }
+    for (index, proxy_candidate) in proxy_candidates.into_iter().enumerate() {
+        let candidate_label = proxy_candidate.clone().unwrap_or_else(|| "DIRECT".to_string());
+        tracing::debug!(
+            "Tentative CONNECT {}/{} vers {} via {}",
+            index + 1,
+            total,
+            target_host_port,
+            candidate_label
+        );
 
-            if let Some(upstream) = url.strip_prefix("socks5://") {
-                return connect_via_socks_upstream(config, "socks5", upstream, target_host_port).await;
+        let attempt = match proxy_candidate {
+            None => tokio::net::TcpStream::connect(target_host_port)
+                .await
+                .map_err(|e| anyhow::anyhow!(e)),
+            Some(url) => {
+                if let Some(upstream) = url.strip_prefix("http://") {
+                    connect_via_http_upstream(config, auth_handler, upstream, target_host_port).await
+                } else if let Some(upstream) = url.strip_prefix("socks4://") {
+                    connect_via_socks_upstream(config, "socks4", upstream, target_host_port).await
+                } else if let Some(upstream) = url.strip_prefix("socks5://") {
+                    connect_via_socks_upstream(config, "socks5", upstream, target_host_port).await
+                } else if let Some(upstream) = url.strip_prefix("socks5h://") {
+                    connect_via_socks_upstream(config, "socks5h", upstream, target_host_port).await
+                } else if let Some(upstream) = url.strip_prefix("socks://") {
+                    connect_via_socks_upstream(config, "socks5", upstream, target_host_port).await
+                } else {
+                    Err(anyhow::anyhow!(
+                        "CONNECT via upstream non supporté pour ce schéma: {}",
+                        url
+                    ))
+                }
             }
+        };
 
-            if let Some(upstream) = url.strip_prefix("socks5h://") {
-                return connect_via_socks_upstream(config, "socks5h", upstream, target_host_port).await;
+        match attempt {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                tracing::warn!(
+                    "CONNECT échoué via {} (tentative {}/{}): {}",
+                    candidate_label,
+                    index + 1,
+                    total,
+                    e
+                );
+                last_error = Some(e);
             }
-
-            anyhow::bail!(
-                "CONNECT via upstream non supporté pour ce schéma: {}",
-                url
-            )
         }
     }
+
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Aucune tentative CONNECT n'a abouti")))
 }
 
 async fn connect_via_socks_upstream(

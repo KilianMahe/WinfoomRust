@@ -1,6 +1,6 @@
 [package]
 name = "winfoom-rust"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 authors = ["Kilian Mahe"]
 description = "Basic Proxy Facade for NTLM, SOCKS and Proxy Auto Config proxies - Rust implementation"
@@ -25,11 +25,13 @@ tower = { version = "0.4", features = ["util"] }
 tower-service = "0.3"
 
 # Client HTTP
-reqwest = { version = "0.12", features = ["json", "socks", "native-tls-alpn"] }
+reqwest = { version = "0.12", features = ["json", "socks", "native-tls-alpn", "blocking"] }
 tokio-socks = "0.5"
 
-# Gestion des proxies
-libproxy = "0.1"
+# Évaluation PAC (moteur JavaScript intégré)
+boa_engine = "0.20"
+boa_gc = "0.20"
+regex = "1"
 
 # Authentification
 base64 = "0.22"

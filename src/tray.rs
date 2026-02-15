@@ -4,7 +4,6 @@ use std::sync::mpsc::{self, Receiver};
 use std::{
     cell::RefCell,
     os::windows::ffi::OsStrExt,
-    path::PathBuf,
     ptr,
     sync::mpsc::Sender,
     thread,
@@ -64,26 +63,15 @@ thread_local! {
 impl TrayController {
     #[cfg(windows)]
     fn tray_icon_handle() -> HICON {
-        let mut candidates: Vec<PathBuf> = Vec::new();
+        // Icône embarquée directement dans le binaire
+        const ICON_DATA: &[u8] = include_bytes!("../assets/icon.ico");
 
-        candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets").join("icon.ico"));
+        // Créer un fichier temporaire pour charger l'icône
+        let temp_dir = std::env::temp_dir();
+        let icon_path = temp_dir.join("winfoomrust_tray_icon.ico");
 
-        if let Ok(cwd) = std::env::current_dir() {
-            candidates.push(cwd.join("assets").join("icon.ico"));
-        }
-
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
-                candidates.push(exe_dir.join("assets").join("icon.ico"));
-                candidates.push(exe_dir.join("icon.ico"));
-            }
-        }
-
-        for icon_path in candidates {
-            if !icon_path.exists() {
-                continue;
-            }
-
+        // Écrire l'icône embarquée dans le fichier temporaire
+        if let Ok(_) = std::fs::write(&icon_path, ICON_DATA) {
             let wide: Vec<u16> = icon_path
                 .as_os_str()
                 .to_string_lossy()
@@ -103,10 +91,16 @@ impl TrayController {
             };
 
             if !handle.is_null() {
+                // Nettoyage du fichier temporaire
+                let _ = std::fs::remove_file(&icon_path);
                 return handle;
             }
+
+            // Si le chargement échoue, nettoyer quand même
+            let _ = std::fs::remove_file(&icon_path);
         }
 
+        // Fallback : utiliser l'icône par défaut de Windows
         unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) }
     }
 

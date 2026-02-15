@@ -1,6 +1,10 @@
 # WinfoomRust - Guide de Compilation et d'Utilisation
 
-Version actuelle: **0.5.0**
+> **⚠️ Projet en cours de développement — version de test (beta)**
+
+Version actuelle: **0.6.0**
+
+**Ce projet est open source et développé avec assistance de l'IA.**
 
 ## Installation de Rust (si nécessaire)
 
@@ -31,6 +35,10 @@ cargo --version
 
 ## Compilation
 
+**Aucune dépendance native n'est requise.** Toutes les dépendances sont des crates Rust gérées automatiquement par Cargo.
+
+> **Note:** L'ancienne dépendance `libproxy` a été remplacée dans la version 0.6 par un évaluateur PAC intégré basé sur `boa_engine` (moteur JavaScript pur Rust). Il n'est plus nécessaire d'installer `vcpkg`, `libproxy.dll` ou `proxy.lib`.
+
 ```bash
 # Naviguer vers le dossier
 cd winfoom-rust
@@ -46,9 +54,7 @@ Les exécutables seront dans:
 - Mode debug: `target/debug/winfoomrust` (ou `.exe` sur Windows)
 - Mode release: `target/release/winfoomrust` (ou `.exe` sur Windows)
 
-Sur Windows, la compilation release copie aussi automatiquement:
-- `target/release/libproxy.dll`
-- `target/release/icon.ico`
+Sur Windows, l'icône est automatiquement embarquée dans l'exécutable.
 
 ## Exécution
 
@@ -79,6 +85,14 @@ L'application créera automatiquement un fichier de configuration à:
 4. **Démarrer le proxy** en cliquant sur "▶ Démarrer le proxy"
 5. **Configurer vos applications** pour utiliser `127.0.0.1:3129` comme proxy
 6. **Accéder aux logs** via le menu **Aide** → **Ouvrir le dossier des logs**
+
+### Mode PAC
+
+En mode `PAC`, l'application évalue directement le fichier PAC configuré grâce à un moteur JavaScript intégré (`boa_engine`):
+- **URL distante:** `http://proxy.company.com/proxy.pac` ou `https://...`
+- **Fichier local:** `C:\Users\...\proxy.pac` ou `file:///C:/Users/.../proxy.pac`
+
+Le fichier PAC configuré dans l'application est directement utilisé, indépendamment des paramètres proxy du système. Toutes les fonctions PAC standard sont implémentées (`FindProxyForURL`, `shExpMatch`, `dnsDomainIs`, `isInNet`, `dnsResolve`, `myIpAddress`, etc.).
 
 ### Zone de notification (Windows)
 
@@ -132,59 +146,14 @@ pac_cache_ttl_seconds = 300
 pac_stale_ttl_seconds = 900
 ```
 
-## Dépendances
+### Proxy PAC (fichier local)
 
-L'application téléchargera automatiquement toutes les dépendances Rust lors de la première compilation. Cela peut prendre quelques minutes.
-
-Une dépendance native est également nécessaire pour la résolution PAC: `libproxy`.
-
-### libproxy (Windows)
-
-Le projet attend les artefacts natifs suivants:
-- `proxy.lib` (ou `libproxy.lib`)
-- `libproxy.dll` (ou `proxy.dll`)
-
-Le `build.rs`:
-- détecte automatiquement ces fichiers (vcpkg + variables d'environnement),
-- crée un alias si seul `libproxy.lib` est présent,
-- copie `libproxy.dll` à côté de l'exécutable dans `target/debug` ou `target/release`.
-
-Installation recommandée avec vcpkg:
-
-```powershell
-git clone https://github.com/microsoft/vcpkg "$env:USERPROFILE\vcpkg"
-& "$env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat"
-& "$env:USERPROFILE\vcpkg\vcpkg.exe" install libproxy:x64-windows
-```
-
-Optionnel: définir explicitement les chemins si auto-détection impossible:
-
-```powershell
-$env:LIBPROXY_LIB_DIR = "C:\path\to\lib"    # contient proxy.lib ou libproxy.lib
-$env:LIBPROXY_DLL_DIR = "C:\path\to\bin"    # contient libproxy.dll ou proxy.dll
-```
-
-Ou simplement:
-
-```powershell
-$env:VCPKG_ROOT = "$env:USERPROFILE\vcpkg"
-```
-
-Puis recompiler:
-
-```powershell
-cargo clean
-cargo build --release
-```
-
-### libproxy (Linux/macOS)
-
-Installer la bibliothèque système correspondante avant compilation (ex: paquets `libproxy`/`libproxy-dev` selon distribution), puis lancer `cargo build --release`.
-
-Si vous rencontrez des problèmes de compilation, essayez:
-```bash
-cargo clean
-cargo build --release
+```toml
+proxy_type = "PAC"
+proxy_pac_file_location = "C:\\Users\\username\\proxy.pac"
+local_port = 3129
+pac_cache_ttl_seconds = 300
+pac_stale_ttl_seconds = 900
 ```
 
 ## Problèmes courants
@@ -196,17 +165,18 @@ cargo build --release
 
 ### Erreurs de compilation
 - Vérifier que vous avez la dernière version de Rust: `rustup update`
-- Nettoyer et recompiler: `cargo clean && cargo build --release`
-
-### `proxy.lib` introuvable (Windows)
-- Vérifier l'installation vcpkg de `libproxy:x64-windows`
-- Vérifier que `VCPKG_ROOT` pointe vers le bon dossier
-- Ou définir `LIBPROXY_LIB_DIR` / `LIBPROXY_DLL_DIR` explicitement
+- Nettoyer et recompiler: `cargo clean` puis `cargo build --release`
 
 ### Le proxy ne démarre pas
 - Vérifier que le port n'est pas déjà utilisé
 - Vérifier les permissions (les ports < 1024 nécessitent des privilèges admin)
 - Consulter les logs dans la console
+
+### Le mode PAC ne fonctionne pas
+- Vérifier que l'URL ou le chemin du fichier PAC est correct
+- Vérifier que le fichier PAC est accessible (réseau ou disque)
+- Consulter les logs pour les erreurs d'évaluation JavaScript
+- Vérifier la syntaxe du fichier PAC (fonction `FindProxyForURL` attendue)
 
 ### Erreurs d'authentification
 - Vérifier les credentials
@@ -224,9 +194,11 @@ Pour toute question ou problème:
 - Vérifier les logs de l'application
 - Ouvrir une issue sur GitHub
 
+Ce projet est en phase de test (beta). Les retours d'expérience et rapports de bugs sont particulièrement appréciés.
+
 ## Note de développement
 
-Cette application a été développée avec assistance IA.
+**Cette application a été développée avec assistance de l'IA.**
 
 ## Performances
 
