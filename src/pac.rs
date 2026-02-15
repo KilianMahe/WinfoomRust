@@ -1,4 +1,4 @@
-// Support pour Proxy Auto Config (PAC) — évaluateur intégré (sans libproxy)
+// Support pour Proxy Auto Config (PAC) — évaluateur intégré
 use anyhow::Result;
 use boa_engine::{Context, JsArgs, JsResult, JsValue, Source, js_string};
 use boa_engine::NativeFunction;

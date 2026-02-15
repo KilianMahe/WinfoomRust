@@ -27,7 +27,7 @@ Version actuelle: **0.6.0**
 
 ## Aperçu
 
-WinfoomRust est une réimplémentation moderne de [Winfoom](https://github.com/ecovaci/winfoom).  
+WinfoomRust est une réimplémentation de [Winfoom](https://github.com/ecovaci/winfoom) en Rust.  
 L'application expose un proxy local (par défaut `127.0.0.1:3129`) et relaie les requêtes vers un proxy upstream en gérant les scénarios d'authentification et de connectivité.
 
 ## Fonctionnalités
@@ -108,9 +108,7 @@ source "$HOME/.cargo/env"
 
 ### Dépendances
 
-Toutes les dépendances sont des crates Rust gérées automatiquement par Cargo lors de la compilation. **Aucune bibliothèque native externe n'est requise.**
-
-> **Note:** L'ancienne dépendance `libproxy` a été remplacée dans la version 0.6 par un évaluateur PAC intégré basé sur `boa_engine` (moteur JavaScript pur Rust). Il n'est plus nécessaire d'installer `vcpkg`, `libproxy.dll` ou `proxy.lib`.
+Toutes les dépendances sont des crates Rust gérées automatiquement par Cargo lors de la compilation.
 
 ## Utilisation
 

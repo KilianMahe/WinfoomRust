@@ -35,9 +35,7 @@ cargo --version
 
 ## Compilation
 
-**Aucune dépendance native n'est requise.** Toutes les dépendances sont des crates Rust gérées automatiquement par Cargo.
-
-> **Note:** L'ancienne dépendance `libproxy` a été remplacée dans la version 0.6 par un évaluateur PAC intégré basé sur `boa_engine` (moteur JavaScript pur Rust). Il n'est plus nécessaire d'installer `vcpkg`, `libproxy.dll` ou `proxy.lib`.
+Toutes les dépendances sont des crates Rust gérées automatiquement par Cargo.
 
 ```bash
 # Naviguer vers le dossier
