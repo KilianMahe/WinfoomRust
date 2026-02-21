@@ -4,7 +4,7 @@
 
 HTTP(S) facade proxy in Rust for working with HTTP, SOCKS, and PAC proxies, with a desktop GUI.
 
-Current version: **0.6.0**
+Current version: **0.7.0**
 
 **This project is open source and developed with AI assistance.**
 

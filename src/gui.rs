@@ -25,6 +25,7 @@ pub struct WinfoomrustApp {
     tray_initialized: bool,
     allow_exit: bool,
     show_configuration_window: bool,
+    show_about_window: bool,
 }
 
 struct PacSelectionInfo {
@@ -50,6 +51,7 @@ impl WinfoomrustApp {
             tray_initialized: false,
             allow_exit: false,
             show_configuration_window: false,
+            show_about_window: false,
         }
     }
 
@@ -352,6 +354,13 @@ impl eframe::App for WinfoomrustApp {
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    if ui.button("Configuration").clicked() {
+                        self.show_configuration_window = true;
+                        ui.close_menu();
+                    }
+
+                    ui.separator();
+
                     if ui.button("Save configuration").clicked() {
                         match self.config.save() {
                             Ok(_) => {
@@ -402,7 +411,7 @@ impl eframe::App for WinfoomrustApp {
                     }
 
                     if ui.button("About").clicked() {
-                        self.status_message = "WinfoomRust v0.5.0 - Proxy Facade".to_string();
+                        self.show_about_window = true;
                         ui.close_menu();
                     }
                 });
@@ -423,17 +432,31 @@ impl eframe::App for WinfoomrustApp {
                 ui.heading("Controls");
                 ui.separator();
 
-                // Start/Stop button
+                // Start/Stop button + Local port
                 ui.horizontal(|ui| {
-                    if self.is_running {
-                        if ui.button("⏹ Stop proxy").clicked() {
-                            self.stop_proxy();
-                        }
+                    let button_text = if self.is_running {
+                        egui::RichText::new("⏹ Stop proxy").size(16.0)
                     } else {
-                        if ui.button("▶ Start proxy").clicked() {
+                        egui::RichText::new("▶ Start proxy").size(16.0)
+                    };
+                    let button = egui::Button::new(button_text)
+                        .min_size(egui::vec2(130.0, 32.0));
+                    if ui.add(button).clicked() {
+                        if self.is_running {
+                            self.stop_proxy();
+                        } else {
                             self.start_proxy();
                         }
                     }
+
+                    ui.add_space(10.0);
+
+                    ui.add_enabled_ui(!self.is_running, |ui| {
+                        ui.label("Port:");
+                        ui.add(egui::DragValue::new(&mut self.config.local_port)
+                            .speed(1)
+                            .range(1024..=65535));
+                    });
                 });
 
                 ui.add_space(10.0);
@@ -478,18 +501,13 @@ impl eframe::App for WinfoomrustApp {
 
                 ui.add_space(10.0);
                 ui.separator();
-
-                // Local port
-                ui.label("Local port:");
-                ui.add(egui::DragValue::new(&mut self.config.local_port)
-                    .speed(1)
-                    .range(1024..=65535));
-
                 ui.add_space(5.0);
 
                 // Test URL
+                ui.heading("Test proxy connection");
+                ui.separator();
                 ui.label("Test URL:");
-                ui.text_edit_singleline(&mut self.config.proxy_test_url);
+                ui.add_sized([ui.available_width().min(220.0), 20.0], egui::TextEdit::singleline(&mut self.config.proxy_test_url));
 
                 ui.add_space(10.0);
 
@@ -582,167 +600,196 @@ impl eframe::App for WinfoomrustApp {
                 ui.add_space(10.0);
 
                 // Proxy type
-                ui.horizontal(|ui| {
-                    ui.label("Proxy type:");
-                    ui.add_space(20.0);
-                    
-                    if ui.selectable_label(
-                        matches!(self.config.proxy_type, ProxyType::HTTP), 
-                        "HTTP"
-                    ).clicked() {
-                        self.config.proxy_type = ProxyType::HTTP;
-                    }
-                    
-                    if ui.selectable_label(
-                        matches!(self.config.proxy_type, ProxyType::SOCKS4), 
-                        "SOCKS4"
-                    ).clicked() {
-                        self.config.proxy_type = ProxyType::SOCKS4;
-                    }
-                    
-                    if ui.selectable_label(
-                        matches!(self.config.proxy_type, ProxyType::SOCKS5), 
-                        "SOCKS5"
-                    ).clicked() {
-                        self.config.proxy_type = ProxyType::SOCKS5;
-                    }
-                    
-                    if ui.selectable_label(
-                        matches!(self.config.proxy_type, ProxyType::PAC), 
-                        "PAC"
-                    ).clicked() {
-                        self.config.proxy_type = ProxyType::PAC;
-                    }
-                    
-                    if ui.selectable_label(
-                        matches!(self.config.proxy_type, ProxyType::DIRECT), 
-                        "DIRECT"
-                    ).clicked() {
-                        self.config.proxy_type = ProxyType::DIRECT;
+                ui.add_enabled_ui(!self.is_running, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Proxy type:");
+                        ui.add_space(20.0);
+                        
+                        if ui.selectable_label(
+                            matches!(self.config.proxy_type, ProxyType::HTTP), 
+                            "HTTP"
+                        ).clicked() {
+                            self.config.proxy_type = ProxyType::HTTP;
+                        }
+                        
+                        if ui.selectable_label(
+                            matches!(self.config.proxy_type, ProxyType::SOCKS4), 
+                            "SOCKS4"
+                        ).clicked() {
+                            self.config.proxy_type = ProxyType::SOCKS4;
+                        }
+                        
+                        if ui.selectable_label(
+                            matches!(self.config.proxy_type, ProxyType::SOCKS5), 
+                            "SOCKS5"
+                        ).clicked() {
+                            self.config.proxy_type = ProxyType::SOCKS5;
+                        }
+                        
+                        if ui.selectable_label(
+                            matches!(self.config.proxy_type, ProxyType::PAC), 
+                            "PAC"
+                        ).clicked() {
+                            self.config.proxy_type = ProxyType::PAC;
+                        }
+                        
+                        if ui.selectable_label(
+                            matches!(self.config.proxy_type, ProxyType::DIRECT), 
+                            "DIRECT"
+                        ).clicked() {
+                            self.config.proxy_type = ProxyType::DIRECT;
+                        }
+                    });
+
+                    ui.add_space(15.0);
+
+                    // Configuration by type
+                    match self.config.proxy_type {
+                        ProxyType::HTTP | ProxyType::SOCKS4 | ProxyType::SOCKS5 => {
+                            ui.group(|ui| {
+                                ui.label("Upstream proxy configuration:");
+                                
+                                ui.add_space(5.0);
+                                ui.horizontal(|ui| {
+                                    ui.label("Host:");
+                                    ui.text_edit_singleline(&mut self.config.proxy_host);
+                                });
+                                
+                                ui.horizontal(|ui| {
+                                    ui.label("Port:");
+                                    ui.add(egui::DragValue::new(&mut self.config.proxy_port)
+                                        .speed(1)
+                                        .range(1..=65535));
+                                });
+                            });
+
+                            ui.add_space(10.0);
+
+                            // Authentication
+                            if matches!(self.config.proxy_type, ProxyType::HTTP) {
+                                ui.group(|ui| {
+                                    ui.label("Authentication:");
+                                    
+                                    #[cfg(windows)]
+                                    {
+                                        ui.checkbox(
+                                            &mut self.config.use_current_credentials,
+                                            "Use current Windows credentials"
+                                        );
+                                    }
+
+                                    if !self.config.use_current_credentials {
+                                        ui.add_space(5.0);
+                                        
+                                        ui.horizontal(|ui| {
+                                            ui.label("Username:");
+                                            ui.text_edit_singleline(&mut self.config.proxy_username);
+                                        });
+                                        
+                                        ui.horizontal(|ui| {
+                                            ui.label("Password:");
+                                            if self.show_password {
+                                                ui.text_edit_singleline(&mut self.config.proxy_password);
+                                            } else {
+                                                ui.add(egui::TextEdit::singleline(&mut self.config.proxy_password)
+                                                    .password(true));
+                                            }
+                                            if ui.button(if self.show_password { "🙈" } else { "👁" }).clicked() {
+                                                self.show_password = !self.show_password;
+                                            }
+                                        });
+
+                                        ui.add_space(5.0);
+                                        ui.horizontal(|ui| {
+                                            ui.label("Protocol:");
+                                            ui.selectable_value(
+                                                &mut self.config.http_auth_protocol,
+                                                HttpAuthProtocol::NTLM,
+                                                "NTLM"
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.config.http_auth_protocol,
+                                                HttpAuthProtocol::BASIC,
+                                                "BASIC"
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.config.http_auth_protocol,
+                                                HttpAuthProtocol::KERBEROS,
+                                                "KERBEROS"
+                                            );
+                                        });
+                                    }
+                                });
+                            }
+                        }
+                        ProxyType::PAC => {
+                            ui.group(|ui| {
+                                ui.label("PAC Configuration:");
+                                
+                                ui.add_space(5.0);
+                                ui.horizontal(|ui| {
+                                    ui.label("PAC File/URL:");
+                                    ui.text_edit_singleline(&mut self.config.proxy_pac_file_location);
+                                });
+                                
+                                ui.add_space(5.0);
+                                ui.label("💡 Can be a local path or an HTTP(S) URL");
+                            });
+                        }
+                        ProxyType::DIRECT => {
+                            ui.label("DIRECT mode - No upstream proxy");
+                            ui.label("Requests are sent directly to their destination.");
+                        }
                     }
                 });
 
-                ui.add_space(15.0);
+                ui.add_space(20.0);
+            });
+        });
 
-                // Configuration by type
-                match self.config.proxy_type {
-                    ProxyType::HTTP | ProxyType::SOCKS4 | ProxyType::SOCKS5 => {
-                        ui.group(|ui| {
-                            ui.label("Upstream proxy configuration:");
-                            
-                            ui.add_space(5.0);
-                            ui.horizontal(|ui| {
-                                ui.label("Host:");
-                                ui.text_edit_singleline(&mut self.config.proxy_host);
-                            });
-                            
-                            ui.horizontal(|ui| {
-                                ui.label("Port:");
-                                ui.add(egui::DragValue::new(&mut self.config.proxy_port)
-                                    .speed(1)
-                                    .range(1..=65535));
-                            });
-                        });
+        // Bottom status bar
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Status:");
+                ui.label(&self.status_message);
+            });
+        });
 
-                        ui.add_space(10.0);
-
-                        // Authentication
-                        if matches!(self.config.proxy_type, ProxyType::HTTP) {
-                            ui.group(|ui| {
-                                ui.label("Authentication:");
-                                
-                                #[cfg(windows)]
-                                {
-                                    ui.checkbox(
-                                        &mut self.config.use_current_credentials,
-                                        "Use current Windows credentials"
-                                    );
-                                }
-
-                                if !self.config.use_current_credentials {
-                                    ui.add_space(5.0);
-                                    
-                                    ui.horizontal(|ui| {
-                                        ui.label("Username:");
-                                        ui.text_edit_singleline(&mut self.config.proxy_username);
-                                    });
-                                    
-                                    ui.horizontal(|ui| {
-                                        ui.label("Password:");
-                                        if self.show_password {
-                                            ui.text_edit_singleline(&mut self.config.proxy_password);
-                                        } else {
-                                            ui.add(egui::TextEdit::singleline(&mut self.config.proxy_password)
-                                                .password(true));
-                                        }
-                                        if ui.button(if self.show_password { "🙈" } else { "👁" }).clicked() {
-                                            self.show_password = !self.show_password;
-                                        }
-                                    });
-
-                                    ui.add_space(5.0);
-                                    ui.horizontal(|ui| {
-                                        ui.label("Protocol:");
-                                        ui.selectable_value(
-                                            &mut self.config.http_auth_protocol,
-                                            HttpAuthProtocol::NTLM,
-                                            "NTLM"
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.config.http_auth_protocol,
-                                            HttpAuthProtocol::BASIC,
-                                            "BASIC"
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.config.http_auth_protocol,
-                                            HttpAuthProtocol::KERBEROS,
-                                            "KERBEROS"
-                                        );
-                                    });
-                                }
-                            });
-                        }
-                    }
-                    ProxyType::PAC => {
-                        ui.group(|ui| {
-                            ui.label("PAC Configuration:");
-                            
-                            ui.add_space(5.0);
-                            ui.horizontal(|ui| {
-                                ui.label("PAC File/URL:");
-                                ui.text_edit_singleline(&mut self.config.proxy_pac_file_location);
-                            });
-                            
-                            ui.add_space(5.0);
-                            ui.label("💡 Can be a local path or an HTTP(S) URL");
-                        });
-                    }
-                    ProxyType::DIRECT => {
-                        ui.label("DIRECT mode - No upstream proxy");
-                        ui.label("Requests are sent directly to their destination.");
-                    }
-                }
-
-                ui.add_space(15.0);
-
-                // Advanced options
-                ui.collapsing("Advanced options", |ui| {
+        if self.show_configuration_window {
+            let mut open = true;
+            egui::Window::new("Application Settings")
+                .open(&mut open)
+                .resizable(true)
+                .default_width(380.0)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
                     ui.add_space(5.0);
-                    
+
+                    ui.checkbox(&mut self.config.autostart, "Auto-start proxy");
+                    ui.checkbox(&mut self.config.start_minimized, "Start application minimized");
+
+                    ui.add_space(5.0);
+                    ui.separator();
+                    ui.add_space(5.0);
+
+                    ui.label(egui::RichText::new("Advanced options").strong());
+                    ui.add_space(5.0);
+
                     ui.horizontal(|ui| {
                         ui.label("Socket timeout (s):");
                         ui.add(egui::DragValue::new(&mut self.config.socket_timeout)
                             .speed(1)
                             .range(5..=300));
                     });
-                    
+
                     ui.horizontal(|ui| {
                         ui.label("Connection timeout (s):");
                         ui.add(egui::DragValue::new(&mut self.config.connect_timeout)
                             .speed(1)
                             .range(5..=120));
                     });
-                    
+
                     ui.horizontal(|ui| {
                         ui.label("Blacklist timeout (s):");
                         ui.add(egui::DragValue::new(&mut self.config.blacklist_timeout)
@@ -763,17 +810,6 @@ impl eframe::App for WinfoomrustApp {
                             .speed(1)
                             .range(60..=3600));
                     });
-
-                    ui.add_space(10.0);
-                    ui.checkbox(&mut self.config.autodetect, "Automatic parameter detection");
-                });
-
-                // Application settings
-                ui.collapsing("Application settings", |ui| {
-                    ui.add_space(5.0);
-
-                    ui.checkbox(&mut self.config.autostart, "Auto-start proxy");
-                    ui.checkbox(&mut self.config.start_minimized, "Start application minimized");
 
                     ui.add_space(5.0);
                     ui.separator();
@@ -798,39 +834,69 @@ impl eframe::App for WinfoomrustApp {
                     ui.separator();
                     ui.add_space(5.0);
 
-                    if ui.button("Restart application").clicked() {
-                        if let Err(e) = self.config.save() {
-                            self.status_message = format!("Config save error: {}", e);
-                        } else {
-                            match Self::restart_application() {
+                    ui.horizontal(|ui| {
+                        if ui.button("💾 Save").clicked() {
+                            match self.config.save() {
                                 Ok(_) => {
-                                    self.allow_exit = true;
-                                    self.status_message = "Restarting the application...".to_string();
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    self.status_message = "Configuration saved".to_string();
+                                    tracing::info!("Configuration saved");
                                 }
                                 Err(e) => {
-                                    self.status_message = e;
+                                    self.status_message = format!("Error: {}", e);
+                                    tracing::error!("Config save error: {}", e);
                                 }
                             }
                         }
-                    }
+
+                        if ui.button("Restart application").clicked() {
+                            if let Err(e) = self.config.save() {
+                                self.status_message = format!("Config save error: {}", e);
+                            } else {
+                                match Self::restart_application() {
+                                    Ok(_) => {
+                                        self.allow_exit = true;
+                                        self.status_message = "Restarting the application...".to_string();
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                    Err(e) => {
+                                        self.status_message = e;
+                                    }
+                                }
+                            }
+                        }
+                    });
                 });
+            if !open {
+                self.show_configuration_window = false;
+            }
+        }
 
-                ui.add_space(20.0);
-            });
-        });
-
-        // Bottom status bar
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Status:");
-                ui.label(&self.status_message);
-            });
-        });
-
-        if self.show_configuration_window {
-            // Settings are now integrated in the central panel
-            self.show_configuration_window = false;
+        if self.show_about_window {
+            let mut open = true;
+            egui::Window::new("About")
+                .open(&mut open)
+                .resizable(false)
+                .collapsible(false)
+                .default_width(300.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(10.0);
+                        ui.heading("WinfoomRust");
+                        ui.add_space(5.0);
+                        ui.label("Version 0.7.0");
+                        ui.add_space(10.0);
+                        ui.label("Proxy Facade for Windows");
+                        ui.add_space(5.0);
+                        ui.label("A local proxy server that forwards requests\nthrough a corporate proxy.");
+                        ui.add_space(10.0);
+                        ui.hyperlink_to("GitHub Repository", "https://github.com/KilianMahe/WinfoomRust");
+                        ui.add_space(10.0);
+                    });
+                });
+            if !open {
+                self.show_about_window = false;
+            }
         }
     }
 }

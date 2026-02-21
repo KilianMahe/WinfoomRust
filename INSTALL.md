@@ -2,7 +2,7 @@
 
 > **⚠️ Project under active development — beta version**
 
-Current version: **0.6.0**
+Current version: **0.7.0**
 
 **This project is open source and developed with AI assistance.**
 

@@ -1,6 +1,6 @@
 [package]
 name = "winfoom-rust"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 authors = ["Kilian Mahe"]
 description = "Basic Proxy Facade for NTLM, SOCKS and Proxy Auto Config proxies - Rust implementation"
