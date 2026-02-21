@@ -249,8 +249,6 @@ impl AuthHandler {
 }
 
 fn extract_proxy_auth_challenge(headers: &HeaderMap, scheme: &str) -> Option<Vec<u8>> {
-    let scheme_lower = scheme.to_ascii_lowercase();
-
     for value in headers.get_all(PROXY_AUTHENTICATE).iter() {
         let Ok(value_str) = value.to_str() else {
             continue;
@@ -258,20 +256,21 @@ fn extract_proxy_auth_challenge(headers: &HeaderMap, scheme: &str) -> Option<Vec
 
         for part in value_str.split(',') {
             let trimmed = part.trim();
-            let lower = trimmed.to_ascii_lowercase();
 
-            if lower == scheme_lower {
+            if trimmed.eq_ignore_ascii_case(scheme) {
                 return None;
             }
 
-            if lower.starts_with(&(scheme_lower.clone() + " ")) {
-                let token = trimmed[scheme.len()..].trim();
-                if token.is_empty() {
-                    return None;
-                }
+            if let Some((prefix, rest)) = trimmed.split_once(' ') {
+                if prefix.eq_ignore_ascii_case(scheme) {
+                    let token = rest.trim();
+                    if token.is_empty() {
+                        return None;
+                    }
 
-                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(token) {
-                    return Some(decoded);
+                    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(token) {
+                        return Some(decoded);
+                    }
                 }
             }
         }

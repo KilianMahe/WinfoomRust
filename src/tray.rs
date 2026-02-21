@@ -71,7 +71,7 @@ impl TrayController {
         let icon_path = temp_dir.join("winfoomrust_tray_icon.ico");
 
         // Write embedded icon to temporary file
-        if let Ok(_) = std::fs::write(&icon_path, ICON_DATA) {
+        if std::fs::write(&icon_path, ICON_DATA).is_ok() {
             let wide: Vec<u16> = icon_path
                 .as_os_str()
                 .to_string_lossy()
@@ -90,14 +90,11 @@ impl TrayController {
                 )
             };
 
+            let _ = std::fs::remove_file(&icon_path);
+
             if !handle.is_null() {
-                // Cleanup temporary file
-                let _ = std::fs::remove_file(&icon_path);
                 return handle;
             }
-
-                // If loading fails, clean up anyway
-            let _ = std::fs::remove_file(&icon_path);
         }
 
         // Fallback: use the default Windows icon

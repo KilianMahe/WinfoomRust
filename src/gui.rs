@@ -231,6 +231,14 @@ impl WinfoomrustApp {
         Some(format!("{}://{}", scheme, endpoint))
     }
 
+    fn format_pac_raw_entries(entries: &[String]) -> String {
+        if entries.is_empty() {
+            "[]".to_string()
+        } else {
+            format!("[{}]", entries.join(", "))
+        }
+    }
+
     fn logs_directory() -> PathBuf {
         let app_data = dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."));
@@ -546,11 +554,7 @@ impl eframe::App for WinfoomrustApp {
                         match Self::test_connection(&test_url, local_port).await {
                             Ok(info) => {
                                 let msg = if let Some(pac) = pac_selection_info {
-                                    let raw = if pac.raw_entries.is_empty() {
-                                        "[]".to_string()
-                                    } else {
-                                        format!("[{}]", pac.raw_entries.join(", "))
-                                    };
+                                    let raw = Self::format_pac_raw_entries(&pac.raw_entries);
                                     format!(
                                         "✓ Connection successful: {} | URL sent to PAC: {} | Raw PAC: {} | Selected PAC proxy: {}",
                                         info,
@@ -567,11 +571,7 @@ impl eframe::App for WinfoomrustApp {
                             }
                             Err(e) => {
                                 let msg = if let Some(pac) = pac_selection_info {
-                                    let raw = if pac.raw_entries.is_empty() {
-                                        "[]".to_string()
-                                    } else {
-                                        format!("[{}]", pac.raw_entries.join(", "))
-                                    };
+                                    let raw = Self::format_pac_raw_entries(&pac.raw_entries);
                                     format!(
                                         "✗ Error: {} | URL sent to PAC: {} | Raw PAC: {} | Selected PAC proxy: {}",
                                         e,

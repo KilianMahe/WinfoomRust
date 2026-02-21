@@ -207,11 +207,9 @@ impl ProxyServer {
                                     }
                                     
                                     // If not CONNECT, treat as HTTP request
-                                    // Extract method, URI and version
-                                    let parts: Vec<&str> = first_line.split_whitespace().collect();
-                                    if parts.len() >= 2 {
-                                        let method = parts[0];
-                                        let uri = parts[1];
+                                    // Extract method and URI without extra allocations
+                                    let mut parts = first_line.split_whitespace();
+                                    if let (Some(method), Some(uri)) = (parts.next(), parts.next()) {
                                         
                                         tracing::debug!("HTTP request: {} {}", method, uri);
                                         
@@ -774,11 +772,11 @@ fn build_proxy_authorization_header(
 }
 
 // Extract host:port from CONNECT line
-fn extract_connect_host(request_line: &str) -> Option<String> {
+fn extract_connect_host(request_line: &str) -> Option<&str> {
     // Format: "CONNECT host:port HTTP/1.1"
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() >= 2 && parts[0] == "CONNECT" {
-        return Some(parts[1].to_string());
+    let mut parts = request_line.split_whitespace();
+    if parts.next()? == "CONNECT" {
+        return parts.next();
     }
     None
 }

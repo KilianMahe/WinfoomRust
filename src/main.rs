@@ -10,12 +10,13 @@ mod tray;
 
 use eframe::egui;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
+use std::path::{Path, PathBuf};
 
 const LOG_DIR_NAME: &str = "WinfoomRust";
 const LOG_FILE_PREFIX: &str = "winfoom.log";
 const MAX_LOG_FILES: usize = 14;
 
-fn cleanup_old_logs(log_dir: &std::path::Path) {
+fn cleanup_old_logs(log_dir: &Path) {
     let entries = match std::fs::read_dir(log_dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -53,29 +54,20 @@ fn cleanup_old_logs(log_dir: &std::path::Path) {
     }
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn prepare_log_dir() -> PathBuf {
+    let app_data = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
+    let winfoom_dir = app_data.join(LOG_DIR_NAME);
+    let _ = std::fs::create_dir_all(&winfoom_dir);
+    winfoom_dir
+}
 
-    // Load configuration
-    let config = config::Config::load().unwrap_or_default();
-
-    // Prepare logs directory
-    let log_dir = {
-        let app_data = dirs::data_local_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let winfoom_dir = app_data.join(LOG_DIR_NAME);
-        let _ = std::fs::create_dir_all(&winfoom_dir);
-        winfoom_dir
-    };
-
-    cleanup_old_logs(&log_dir);
-    
+fn init_tracing(log_dir: &Path, log_level: &str) -> tracing_appender::non_blocking::WorkerGuard {
     // Use tracing_appender with daily rotation
-    let file_appender = tracing_appender::rolling::daily(&log_dir, LOG_FILE_PREFIX);
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let file_appender = tracing_appender::rolling::daily(log_dir, LOG_FILE_PREFIX);
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .or_else(|_| tracing_subscriber::EnvFilter::try_new(config.log_level.clone()))
+        .or_else(|_| tracing_subscriber::EnvFilter::try_new(log_level))
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     
     #[cfg(debug_assertions)]
@@ -88,6 +80,20 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(log_writer)
         .with_env_filter(env_filter)
         .init();
+
+    guard
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+
+    // Load configuration
+    let config = config::Config::load().unwrap_or_default();
+
+    // Prepare logs directory
+    let log_dir = prepare_log_dir();
+    cleanup_old_logs(&log_dir);
+    let _log_guard = init_tracing(&log_dir, &config.log_level);
 
     tracing::info!("Starting WinfoomRust");
     tracing::info!("Logs directory: {:?}", log_dir);

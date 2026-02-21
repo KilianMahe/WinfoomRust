@@ -129,17 +129,7 @@ impl PacResolver {
                     url
                 );
 
-                if !state.in_flight.contains_key(&parent_key) {
-                    let notify = Arc::new(Notify::new());
-                    state.in_flight.insert(parent_key.clone(), Arc::clone(&notify));
-
-                    let resolver = Arc::clone(self);
-                    let refresh_url = url_owned.clone();
-                    let refresh_key = parent_key.clone();
-                    tokio::spawn(async move {
-                        let _ = resolver.resolve_for_key(refresh_key, refresh_url).await;
-                    });
-                }
+                self.spawn_refresh_if_needed(&mut state, &parent_key, &url_owned);
 
                 return Ok(cached);
             }
@@ -156,6 +146,27 @@ impl PacResolver {
 
             return self.resolve_for_key(parent_key.clone(), url_owned.clone()).await;
         }
+    }
+
+    fn spawn_refresh_if_needed(
+        self: &Arc<Self>,
+        state: &mut PacState,
+        parent_key: &str,
+        url: &str,
+    ) {
+        if state.in_flight.contains_key(parent_key) {
+            return;
+        }
+
+        let notify = Arc::new(Notify::new());
+        state.in_flight.insert(parent_key.to_string(), Arc::clone(&notify));
+
+        let resolver = Arc::clone(self);
+        let refresh_url = url.to_string();
+        let refresh_key = parent_key.to_string();
+        tokio::spawn(async move {
+            let _ = resolver.resolve_for_key(refresh_key, refresh_url).await;
+        });
     }
 
     pub async fn prewarm(self: &Arc<Self>, urls: &[String]) {
@@ -297,96 +308,34 @@ fn evaluate_pac_script(pac_script: &str, url: &str, host: &str) -> Result<String
 }
 
 fn register_pac_helpers(context: &mut Context) -> Result<()> {
-    // isPlainHostName(host)
-    context.register_global_builtin_callable(
-        js_string!("isPlainHostName"),
-        1,
-        NativeFunction::from_fn_ptr(pac_is_plain_host_name),
-    ).map_err(|e| anyhow::anyhow!("Error registering isPlainHostName: {}", e))?;
+    fn register(
+        context: &mut Context,
+        name: &'static str,
+        length: usize,
+        func: fn(&JsValue, &[JsValue], &mut Context) -> JsResult<JsValue>,
+    ) -> Result<()> {
+        context
+            .register_global_builtin_callable(
+                js_string!(name),
+                length,
+                NativeFunction::from_fn_ptr(func),
+            )
+            .map_err(|e| anyhow::anyhow!("Error registering {}: {}", name, e))
+    }
 
-    // dnsDomainIs(host, domain)
-    context.register_global_builtin_callable(
-        js_string!("dnsDomainIs"),
-        2,
-        NativeFunction::from_fn_ptr(pac_dns_domain_is),
-    ).map_err(|e| anyhow::anyhow!("Error registering dnsDomainIs: {}", e))?;
-
-    // localHostOrDomainIs(host, hostdom)
-    context.register_global_builtin_callable(
-        js_string!("localHostOrDomainIs"),
-        2,
-        NativeFunction::from_fn_ptr(pac_local_host_or_domain_is),
-    ).map_err(|e| anyhow::anyhow!("Error registering localHostOrDomainIs: {}", e))?;
-
-    // isResolvable(host)
-    context.register_global_builtin_callable(
-        js_string!("isResolvable"),
-        1,
-        NativeFunction::from_fn_ptr(pac_is_resolvable),
-    ).map_err(|e| anyhow::anyhow!("Error registering isResolvable: {}", e))?;
-
-    // isInNet(host, pattern, mask)
-    context.register_global_builtin_callable(
-        js_string!("isInNet"),
-        3,
-        NativeFunction::from_fn_ptr(pac_is_in_net),
-    ).map_err(|e| anyhow::anyhow!("Error registering isInNet: {}", e))?;
-
-    // dnsResolve(host)
-    context.register_global_builtin_callable(
-        js_string!("dnsResolve"),
-        1,
-        NativeFunction::from_fn_ptr(pac_dns_resolve),
-    ).map_err(|e| anyhow::anyhow!("Error registering dnsResolve: {}", e))?;
-
-    // myIpAddress()
-    context.register_global_builtin_callable(
-        js_string!("myIpAddress"),
-        0,
-        NativeFunction::from_fn_ptr(pac_my_ip_address),
-    ).map_err(|e| anyhow::anyhow!("Error registering myIpAddress: {}", e))?;
-
-    // dnsDomainLevels(host)
-    context.register_global_builtin_callable(
-        js_string!("dnsDomainLevels"),
-        1,
-        NativeFunction::from_fn_ptr(pac_dns_domain_levels),
-    ).map_err(|e| anyhow::anyhow!("Error registering dnsDomainLevels: {}", e))?;
-
-    // shExpMatch(str, shexp)
-    context.register_global_builtin_callable(
-        js_string!("shExpMatch"),
-        2,
-        NativeFunction::from_fn_ptr(pac_sh_exp_match),
-    ).map_err(|e| anyhow::anyhow!("Error registering shExpMatch: {}", e))?;
-
-    // weekdayRange(...)
-    context.register_global_builtin_callable(
-        js_string!("weekdayRange"),
-        3,
-        NativeFunction::from_fn_ptr(pac_weekday_range),
-    ).map_err(|e| anyhow::anyhow!("Error registering weekdayRange: {}", e))?;
-
-    // dateRange(...)
-    context.register_global_builtin_callable(
-        js_string!("dateRange"),
-        7,
-        NativeFunction::from_fn_ptr(pac_date_range),
-    ).map_err(|e| anyhow::anyhow!("Error registering dateRange: {}", e))?;
-
-    // timeRange(...)
-    context.register_global_builtin_callable(
-        js_string!("timeRange"),
-        7,
-        NativeFunction::from_fn_ptr(pac_time_range),
-    ).map_err(|e| anyhow::anyhow!("Error registering timeRange: {}", e))?;
-
-    // alert(msg)
-    context.register_global_builtin_callable(
-        js_string!("alert"),
-        1,
-        NativeFunction::from_fn_ptr(pac_alert),
-    ).map_err(|e| anyhow::anyhow!("Error registering alert: {}", e))?;
+    register(context, "isPlainHostName", 1, pac_is_plain_host_name)?;
+    register(context, "dnsDomainIs", 2, pac_dns_domain_is)?;
+    register(context, "localHostOrDomainIs", 2, pac_local_host_or_domain_is)?;
+    register(context, "isResolvable", 1, pac_is_resolvable)?;
+    register(context, "isInNet", 3, pac_is_in_net)?;
+    register(context, "dnsResolve", 1, pac_dns_resolve)?;
+    register(context, "myIpAddress", 0, pac_my_ip_address)?;
+    register(context, "dnsDomainLevels", 1, pac_dns_domain_levels)?;
+    register(context, "shExpMatch", 2, pac_sh_exp_match)?;
+    register(context, "weekdayRange", 3, pac_weekday_range)?;
+    register(context, "dateRange", 7, pac_date_range)?;
+    register(context, "timeRange", 7, pac_time_range)?;
+    register(context, "alert", 1, pac_alert)?;
 
     Ok(())
 }
@@ -644,36 +593,45 @@ fn get_cached_from_state(
     stale_ttl: Duration,
 ) -> Option<(Vec<String>, bool)> {
     if let Some(entry) = state.cache.get(&keys.exact_key).cloned() {
-        let age = entry.stored_at.elapsed();
-        if entry.kind == CacheEntryKind::Negative {
-            if age <= PAC_NEGATIVE_TTL {
-                return Some((entry.proxies, true));
-            }
-        } else if age <= cache_ttl {
-            return Some((entry.proxies, true));
-        } else if age <= stale_ttl {
-            return Some((entry.proxies, false));
+        if let Some(result) = cache_entry_status(&entry, cache_ttl, stale_ttl) {
+            return Some(result);
         }
     }
     state.cache.remove(&keys.exact_key);
 
     if keys.parent_key != keys.exact_key {
         if let Some(entry) = state.cache.get(&keys.parent_key).cloned() {
-            let age = entry.stored_at.elapsed();
-            if entry.kind == CacheEntryKind::Negative {
-                if age <= PAC_NEGATIVE_TTL {
-                    return Some((entry.proxies, true));
-                }
-            } else if age <= cache_ttl {
-                return Some((entry.proxies, true));
-            } else if age <= stale_ttl {
-                return Some((entry.proxies, false));
+            if let Some(result) = cache_entry_status(&entry, cache_ttl, stale_ttl) {
+                return Some(result);
             }
         }
         state.cache.remove(&keys.parent_key);
     }
 
     None
+}
+
+fn cache_entry_status(
+    entry: &CacheEntry,
+    cache_ttl: Duration,
+    stale_ttl: Duration,
+) -> Option<(Vec<String>, bool)> {
+    let age = entry.stored_at.elapsed();
+
+    if entry.kind == CacheEntryKind::Negative {
+        if age <= PAC_NEGATIVE_TTL {
+            return Some((entry.proxies.clone(), true));
+        }
+        return None;
+    }
+
+    if age <= cache_ttl {
+        Some((entry.proxies.clone(), true))
+    } else if age <= stale_ttl {
+        Some((entry.proxies.clone(), false))
+    } else {
+        None
+    }
 }
 
 fn put_cache_in_state(

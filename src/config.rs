@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use anyhow::Result;
 
+const CONFIG_DIR_NAME: &str = "winfoom-rust";
+const CONFIG_FILE_NAME: &str = "config.toml";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProxyType {
     HTTP,
@@ -138,7 +141,7 @@ impl Config {
         let config_dir = dirs::config_dir()
             .ok_or_else(|| anyhow::anyhow!("Unable to find configuration directory"))?;
         
-        Ok(config_dir.join("winfoom-rust").join("config.toml"))
+        Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
     }
 }
 
