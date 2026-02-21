@@ -8,6 +8,8 @@ Current version: **0.7.0**
 
 **This project is open source and developed with AI assistance.**
 
+![alt text](WinfoomRust.jpg "WinfoomRust")
+
 ---
 
 ## Table of Contents
