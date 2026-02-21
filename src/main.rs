@@ -1,4 +1,4 @@
-// Main entry point - lance l'interface graphique
+// Main entry point - launches the graphical interface
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
@@ -19,7 +19,7 @@ fn cleanup_old_logs(log_dir: &std::path::Path) {
     let entries = match std::fs::read_dir(log_dir) {
         Ok(entries) => entries,
         Err(e) => {
-            tracing::warn!("Impossible de lire le dossier de logs {:?}: {}", log_dir, e);
+            tracing::warn!("Unable to read logs folder {:?}: {}", log_dir, e);
             return;
         }
     };
@@ -48,7 +48,7 @@ fn cleanup_old_logs(log_dir: &std::path::Path) {
 
     for (old_path, _) in log_files.into_iter().skip(MAX_LOG_FILES) {
         if let Err(e) = std::fs::remove_file(&old_path) {
-            tracing::warn!("Impossible de supprimer ancien log {:?}: {}", old_path, e);
+            tracing::warn!("Unable to delete old log {:?}: {}", old_path, e);
         }
     }
 }
@@ -56,10 +56,10 @@ fn cleanup_old_logs(log_dir: &std::path::Path) {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 
-    // Charger la configuration
+    // Load configuration
     let config = config::Config::load().unwrap_or_default();
 
-    // Préparer le dossier de logs
+    // Prepare logs directory
     let log_dir = {
         let app_data = dirs::data_local_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
 
     cleanup_old_logs(&log_dir);
     
-    // Utiliser tracing_appender avec rotation quotidienne
+    // Use tracing_appender with daily rotation
     let file_appender = tracing_appender::rolling::daily(&log_dir, LOG_FILE_PREFIX);
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
@@ -89,9 +89,9 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(env_filter)
         .init();
 
-    tracing::info!("Démarrage de WinfoomRust");
-    tracing::info!("Dossier de logs: {:?}", log_dir);
-    tracing::info!("Rétention logs: {} fichiers max", MAX_LOG_FILES);
+    tracing::info!("Starting WinfoomRust");
+    tracing::info!("Logs directory: {:?}", log_dir);
+    tracing::info!("Log retention: {} files max", MAX_LOG_FILES);
 
     let window_icon = std::fs::read("assets/icon.png")
         .ok()
@@ -108,19 +108,19 @@ async fn main() -> anyhow::Result<()> {
         viewport = viewport.with_icon(icon);
     }
     
-    // Options de l'interface graphique
+    // Graphical interface options
     let options = eframe::NativeOptions {
         viewport,
         ..Default::default()
     };
 
-    // Lancer l'application
+    // Launch the application
     match eframe::run_native(
         "WinfoomRust",
         options,
         Box::new(|_cc| Ok(Box::new(gui::WinfoomrustApp::new(config)))),
     ) {
         Ok(_) => Ok(()),
-        Err(e) => Err(anyhow::anyhow!("Erreur eframe: {:?}", e)),
+        Err(e) => Err(anyhow::anyhow!("eframe error: {:?}", e)),
     }
 }

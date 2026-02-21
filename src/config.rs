@@ -1,4 +1,4 @@
-// Configuration de l'application
+// Application configuration
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use anyhow::Result;
@@ -109,14 +109,14 @@ impl Config {
         let config_path = Self::config_path()?;
         
         if !config_path.exists() {
-            tracing::info!("Configuration non trouvée, utilisation des valeurs par défaut");
+            tracing::info!("Configuration not found, using default values");
             return Ok(Self::default());
         }
 
         let content = std::fs::read_to_string(&config_path)?;
         let config: Config = toml::from_str(&content)?;
         
-        tracing::info!("Configuration chargée depuis {:?}", config_path);
+        tracing::info!("Configuration loaded from {:?}", config_path);
         Ok(config)
     }
 
@@ -130,13 +130,13 @@ impl Config {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(&config_path, content)?;
         
-        tracing::info!("Configuration sauvegardée dans {:?}", config_path);
+        tracing::info!("Configuration saved to {:?}", config_path);
         Ok(())
     }
 
     fn config_path() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Impossible de trouver le répertoire de configuration"))?;
+            .ok_or_else(|| anyhow::anyhow!("Unable to find configuration directory"))?;
         
         Ok(config_dir.join("winfoom-rust").join("config.toml"))
     }

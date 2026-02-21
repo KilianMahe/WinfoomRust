@@ -1,67 +1,67 @@
 # WinfoomRust
 
-> **⚠️ Projet en cours de développement — version de test (beta)**
+> **⚠️ Project under active development — beta version**
 
-Proxy facade HTTP(S) en Rust pour travailler avec des proxies HTTP, SOCKS et PAC, avec interface graphique desktop.
+HTTP(S) facade proxy in Rust for working with HTTP, SOCKS, and PAC proxies, with a desktop GUI.
 
-Version actuelle: **0.6.0**
+Current version: **0.6.0**
 
-**Ce projet est open source et développé avec assistance de l'IA.**
+**This project is open source and developed with AI assistance.**
 
 ---
 
-## Sommaire
+## Table of Contents
 
-- [Aperçu](#aperçu)
-- [Fonctionnalités](#fonctionnalités)
+- [Overview](#overview)
+- [Features](#features)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
-- [Utilisation](#utilisation)
+- [Usage](#usage)
 - [Configuration](#configuration)
 - [Logs](#logs)
-- [Dépannage](#dépannage)
+- [Troubleshooting](#troubleshooting)
 - [Architecture](#architecture)
 - [Roadmap](#roadmap)
-- [Contribution](#contribution)
-- [Licence](#licence)
+- [Contributing](#contributing)
+- [License](#license)
 
-## Aperçu
+## Overview
 
-WinfoomRust est une réimplémentation de [Winfoom](https://github.com/ecovaci/winfoom) en Rust.  
-L'application expose un proxy local (par défaut `127.0.0.1:3129`) et relaie les requêtes vers un proxy upstream en gérant les scénarios d'authentification et de connectivité.
+WinfoomRust is a reimplementation of [Winfoom](https://github.com/ecovaci/winfoom) in Rust.  
+The application exposes a local proxy (default `127.0.0.1:3129`) and relays requests to an upstream proxy, handling authentication and connectivity scenarios.
 
-## Fonctionnalités
+## Features
 
-- Types de proxy upstream:
+- Upstream proxy types:
   - `HTTP`
   - `SOCKS4` / `SOCKS5`
-  - `PAC` (évaluation intégrée via moteur JavaScript)
+  - `PAC` (built-in evaluation via JavaScript engine)
   - `DIRECT`
-- Évaluation PAC intégrée:
-  - Moteur JavaScript embarqué (`boa_engine`) — **aucune dépendance native requise**
-  - Support des fichiers PAC locaux (`C:\...\proxy.pac`, `file:///...`) et distants (`http://...`)
-  - Implémentation complète des fonctions PAC standard (`FindProxyForURL`, `shExpMatch`, `dnsDomainIs`, `isInNet`, `dnsResolve`, `myIpAddress`, etc.)
-  - Cache avec TTL configurable et mécanisme stale-while-revalidate
-- Auth HTTP:
-  - `BASIC` manuel: supporté
-  - `NTLM` / `KERBEROS` + `use_current_credentials = true` (Windows): supporté
-  - `NTLM` / `KERBEROS` avec credentials manuels: non supporté
-- Interface graphique `egui`
-- Zone de notification Windows (tray):
-  - clic gauche: restaurer la fenêtre
-  - clic droit: menu `Ouvrir` / `Quitter`
-- Rotation quotidienne des logs + rétention
-- Packaging Windows:
-  - icône EXE embarquée (ressource Windows)
-  - icône tray embarquée dans le binaire
+- Built-in PAC evaluation:
+  - Embedded JavaScript engine (`boa_engine`) — **no native dependencies required**
+  - Support for local PAC files (`C:\...\proxy.pac`, `file:///...`) and remote ones (`http://...`)
+  - Full implementation of standard PAC functions (`FindProxyForURL`, `shExpMatch`, `dnsDomainIs`, `isInNet`, `dnsResolve`, `myIpAddress`, etc.)
+  - Cache with configurable TTL and stale-while-revalidate mechanism
+- HTTP Auth:
+  - Manual `BASIC`: supported
+  - `NTLM` / `KERBEROS` + `use_current_credentials = true` (Windows): supported
+  - `NTLM` / `KERBEROS` with manual credentials: not supported
+- `egui` graphical interface
+- Windows notification area (tray):
+  - Left click: restore window
+  - Right click: `Open` / `Quit` menu
+- Daily log rotation + retention
+- Windows packaging:
+  - Embedded EXE icon (Windows resource)
+  - Tray icon embedded in the binary
 
 ## Quick Start
 
-### Prérequis
+### Prerequisites
 
 - Rust `1.75+`
-- Windows, Linux ou macOS
-- **Aucune dépendance native** (toutes les dépendances sont gérées par Cargo)
+- Windows, Linux, or macOS
+- **No native dependencies** (all dependencies are managed by Cargo)
 
 ### Build
 
@@ -69,12 +69,12 @@ L'application expose un proxy local (par défaut `127.0.0.1:3129`) et relaie les
 cargo build --release
 ```
 
-Binaire généré:
+Generated binary:
 
 - Windows: `target/release/winfoomrust.exe`
 - Linux/macOS: `target/release/winfoomrust`
 
-Sous Windows, l'icône est automatiquement embarquée dans l'exécutable.
+On Windows, the icon is automatically embedded in the executable.
 
 ### Run
 
@@ -82,7 +82,7 @@ Sous Windows, l'icône est automatiquement embarquée dans l'exécutable.
 # via cargo
 cargo run --release
 
-# ou exécution directe
+# or run directly
 ./target/release/winfoomrust      # Linux/macOS
 .\target\release\winfoomrust.exe # Windows
 ```
@@ -91,7 +91,7 @@ cargo run --release
 
 ### Rust
 
-Si Rust n'est pas installé:
+If Rust is not installed:
 
 - Windows:
 
@@ -106,41 +106,41 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-### Dépendances
+### Dependencies
 
-Toutes les dépendances sont des crates Rust gérées automatiquement par Cargo lors de la compilation.
+All dependencies are Rust crates managed automatically by Cargo during compilation.
 
-## Utilisation
+## Usage
 
-1. Lancer l'application.
-2. Choisir un type de proxy (`HTTP`, `SOCKS4`, `SOCKS5`, `PAC`, `DIRECT`).
-3. Renseigner le proxy upstream (hôte/port).
-4. Configurer l'auth si nécessaire.
-5. Démarrer le proxy local.
-6. Configurer les applications clientes sur `127.0.0.1:3129`.
+1. Launch the application.
+2. Select a proxy type (`HTTP`, `SOCKS4`, `SOCKS5`, `PAC`, `DIRECT`).
+3. Enter the upstream proxy details (host/port).
+4. Configure authentication if needed.
+5. Start the local proxy.
+6. Configure client applications to use `127.0.0.1:3129`.
 
-### Mode PAC
+### PAC Mode
 
-En mode `PAC`, l'application évalue directement le fichier PAC configuré:
-- **URL distante:** `http://proxy.company.com/proxy.pac` ou `https://...`
-- **Fichier local:** `C:\Users\...\proxy.pac` ou `file:///C:/Users/.../proxy.pac`
+In `PAC` mode, the application directly evaluates the configured PAC file:
+- **Remote URL:** `http://proxy.company.com/proxy.pac` or `https://...`
+- **Local file:** `C:\Users\...\proxy.pac` or `file:///C:/Users/.../proxy.pac`
 
-L'évaluation utilise un moteur JavaScript intégré (`boa_engine`) qui implémente toutes les fonctions PAC standard. Le fichier PAC configuré dans l'application est directement utilisé, indépendamment des paramètres proxy du système.
+Evaluation uses a built-in JavaScript engine (`boa_engine`) that implements all standard PAC functions. The PAC file configured in the application is used directly, independently of system proxy settings.
 
-### Tray Windows
+### Windows Tray
 
-- Fermer avec `X` masque l'app dans le tray.
-- Clic gauche tray: restaure la fenêtre.
-- Clic droit tray: menu `Ouvrir` / `Quitter`.
+- Closing with `X` minimizes the app to the tray.
+- Left click on the tray icon: restores the window.
+- Right click: `Open` / `Quit` menu.
 
 ## Configuration
 
-Le fichier est sauvegardé automatiquement:
+The configuration file is saved automatically:
 
 - Windows: `%APPDATA%\winfoom-rust\config.toml`
 - Linux/macOS: `~/.config/winfoom-rust/config.toml`
 
-Exemple:
+Example:
 
 ```toml
 proxy_type = "HTTP"
@@ -171,87 +171,87 @@ log_level = "info"
 
 ## Logs
 
-- Accès rapide: menu `Aide` → `Ouvrir le dossier des logs`
-- Rotation: quotidienne
-- Rétention par défaut: 14 fichiers
-- Niveaux: `trace`, `debug`, `info`, `warn`, `error`
+- Quick access: **Help** menu → **Open logs folder**
+- Rotation: daily
+- Default retention: 14 files
+- Levels: `trace`, `debug`, `info`, `warn`, `error`
 
-Mode debug:
+Debug mode:
 
 ```bash
 RUST_LOG=debug cargo run --release
 ```
 
-## Dépannage
+## Troubleshooting
 
-### Le proxy local ne démarre pas
+### The local proxy won't start
 
-- Vérifier que le port local n'est pas déjà utilisé
-- Vérifier les logs
+- Check that the local port is not already in use
+- Check the logs
 
-### Le mode PAC ne fonctionne pas
+### PAC mode is not working
 
-- Vérifier que l'URL ou le chemin du fichier PAC est correct
-- Vérifier que le fichier PAC est accessible (réseau ou disque)
-- Consulter les logs pour les erreurs d'évaluation JavaScript
-- Vérifier la syntaxe du fichier PAC (fonction `FindProxyForURL` attendue)
+- Verify that the PAC file URL or path is correct
+- Verify that the PAC file is accessible (network or disk)
+- Check the logs for JavaScript evaluation errors
+- Verify the PAC file syntax (`FindProxyForURL` function expected)
 
-### Erreurs d'authentification
+### Authentication errors
 
-- Vérifier le protocole (`BASIC`, `NTLM`, `KERBEROS`)
-- Vérifier le mode credentials (`use_current_credentials`)
-- Rappel: NTLM/Kerberos manuel n'est pas supporté
+- Check the protocol (`BASIC`, `NTLM`, `KERBEROS`)
+- Check the credentials mode (`use_current_credentials`)
+- Reminder: manual NTLM/Kerberos is not supported
 
-### Erreurs de compilation
+### Compilation errors
 
-- Vérifier que vous avez la dernière version de Rust: `rustup update`
-- Nettoyer et recompiler: `cargo clean` puis `cargo build --release`
+- Make sure you have the latest version of Rust: `rustup update`
+- Clean and rebuild: `cargo clean` then `cargo build --release`
 
 ## Architecture
 
 ```text
 src/
-├── main.rs      # Entrée app + options fenêtre
-├── gui.rs       # Interface graphique (egui/eframe)
-├── tray.rs      # Tray Windows natif
-├── proxy.rs     # Serveur proxy local + routage upstream
-├── auth.rs      # Auth HTTP / SSPI
-├── pac.rs       # Évaluateur PAC intégré (boa_engine) + cache
-└── config.rs    # Chargement/sauvegarde config
+├── main.rs      # App entry point + window options
+├── gui.rs       # Graphical interface (egui/eframe)
+├── tray.rs      # Native Windows tray
+├── proxy.rs     # Local proxy server + upstream routing
+├── auth.rs      # HTTP Auth / SSPI
+├── pac.rs       # Built-in PAC evaluator (boa_engine) + cache
+└── config.rs    # Config loading/saving
 ```
 
-### Technologies principales
+### Core Technologies
 
-| Composant | Crate | Rôle |
+| Component | Crate | Role |
 |-----------|-------|------|
-| GUI | `egui` / `eframe` 0.28 | Interface graphique desktop |
-| Serveur proxy | `hyper` 1.4 + `tokio` 1.38 | Serveur HTTP asynchrone |
-| Client HTTP | `reqwest` 0.12 | Client HTTP (upstream + téléchargement PAC) |
-| Évaluation PAC | `boa_engine` 0.20 | Moteur JavaScript pur Rust |
-| Auth Windows | `windows` 0.58 | SSPI (NTLM/Kerberos) |
+| GUI | `egui` / `eframe` 0.28 | Desktop graphical interface |
+| Proxy server | `hyper` 1.4 + `tokio` 1.38 | Asynchronous HTTP server |
+| HTTP client | `reqwest` 0.12 | HTTP client (upstream + PAC download) |
+| PAC evaluation | `boa_engine` 0.20 | Pure Rust JavaScript engine |
+| Windows Auth | `windows` 0.58 | SSPI (NTLM/Kerberos) |
 
 ## Roadmap
 
-- Durcir la compatibilité multi-environnements proxy
-- Étendre la couverture de tests
-- Améliorer la distribution binaire (packaging)
-- Implémenter complètement les fonctions PAC temporelles (`weekdayRange`, `dateRange`, `timeRange`)
+- Harden compatibility across multi-proxy environments
+- Extend test coverage
+- Improve binary distribution (packaging)
+- Fully implement temporal PAC functions (`weekdayRange`, `dateRange`, `timeRange`)
 
-## Contribution
+## Contributing
 
-Les contributions sont bienvenues via issues et pull requests sur GitHub.
+Contributions are welcome via issues and pull requests on GitHub.
 
-Ce projet est en phase de test (beta). Les retours d'expérience et rapports de bugs sont particulièrement appréciés.
+This project is in beta testing. Experience feedback and bug reports are especially appreciated.
 
-## Licence
+## License
 
-Apache-2.0 (voir [LICENSE](LICENSE)).
+Apache-2.0 (see [LICENSE](LICENSE)).
 
-## Remerciements
+## Acknowledgments
 
-- Ce projet est inspiré de [Winfoom](https://github.com/ecovaci/winfoom).
-- **Ce projet a été développé avec assistance de l'IA.**
+- This project is inspired by [Winfoom](https://github.com/ecovaci/winfoom).
+- **This project was developed with AI assistance.**
 
 ---
 
-Projet inspiré de [Winfoom](https://github.com/ecovaci/winfoom).
+Inspired by [Winfoom](https://github.com/ecovaci/winfoom).

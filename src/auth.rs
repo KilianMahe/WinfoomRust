@@ -1,4 +1,4 @@
-// Gestion de l'authentification
+// Authentication management
 use crate::config::Config;
 use crate::config::HttpAuthProtocol;
 use crate::config::ProxyType;
@@ -25,19 +25,19 @@ impl AuthHandler {
     }
 
     pub async fn create_authenticated_client(&self, proxy_url: &str) -> Result<Client> {
-        tracing::debug!("Création client avec proxy: {}", proxy_url);
+        tracing::debug!("Creating client with proxy: {}", proxy_url);
         
         let mut client_builder = Client::builder();
         let auth_mode = self.auth_mode();
 
-        tracing::debug!("Mode d'authentification sélectionné: {:?}", auth_mode);
+        tracing::debug!("Selected authentication mode: {:?}", auth_mode);
 
-        // Configurer le proxy avec authentification si nécessaire
+        // Configure the proxy with authentication if needed
         let proxy = match reqwest::Proxy::all(proxy_url) {
             Ok(p) => match auth_mode {
                 ProxyAuthMode::ManualBasic => {
                     if self.config.proxy_password.is_empty() {
-                        anyhow::bail!("Mode ManualBasic activé mais proxy_password est vide");
+                        anyhow::bail!("ManualBasic mode enabled but proxy_password is empty");
                     }
 
                     p.basic_auth(
@@ -58,25 +58,25 @@ impl AuthHandler {
                         #[cfg(not(windows))]
                         {
                             anyhow::bail!(
-                                "Mode WindowsCurrentCredentials demandé sur un système non-Windows"
+                        "WindowsCurrentCredentials mode requested on a non-Windows system"
                             );
                         }
                     }
                 }
                 ProxyAuthMode::UnsupportedNtlmSspi => {
                     anyhow::bail!(
-                        "Mode NTLM/SSPI non supporté actuellement: handshake NTLM/Kerberos complet non implémenté"
+                        "NTLM/SSPI mode not currently supported: full NTLM/Kerberos handshake not implemented"
                     );
                 }
                 ProxyAuthMode::None => p,
             },
             Err(e) => {
-                tracing::error!("Erreur parsing proxy URL '{}': {}", proxy_url, e);
-                return Err(anyhow::anyhow!("URL proxy invalide '{}': {}", proxy_url, e));
+                tracing::error!("Error parsing proxy URL '{}': {}", proxy_url, e);
+                return Err(anyhow::anyhow!("Invalid proxy URL '{}': {}", proxy_url, e));
             }
         };
 
-        // Ajouter le proxy au builder
+        // Add the proxy to the builder
         client_builder = client_builder.proxy(proxy);
 
         // Timeouts
@@ -86,12 +86,12 @@ impl AuthHandler {
 
         match client_builder.build() {
             Ok(client) => {
-                tracing::debug!("Client créé avec succès");
+                tracing::debug!("Client created successfully");
                 Ok(client)
             },
             Err(e) => {
-                tracing::error!("Erreur construction client: {}", e);
-                Err(anyhow::anyhow!("Impossible de construire le client HTTP: {}", e))
+                tracing::error!("Client build error: {}", e);
+                Err(anyhow::anyhow!("Unable to build HTTP client: {}", e))
             }
         }
     }
@@ -110,7 +110,7 @@ impl AuthHandler {
 
             #[cfg(not(windows))]
             {
-                anyhow::bail!("Handshake SSPI non disponible hors Windows");
+                anyhow::bail!("SSPI handshake not available outside Windows");
             }
         }
 
@@ -138,7 +138,7 @@ impl AuthHandler {
             "GET" => client.get(url),
             "HEAD" => client.head(url),
             "POST" => client.post(url),
-            _ => anyhow::bail!("Méthode HTTP non supportée: {}", method),
+            _ => anyhow::bail!("Unsupported HTTP method: {}", method),
         };
 
         if let Some(value) = proxy_auth_header {
@@ -177,7 +177,7 @@ impl AuthHandler {
         }
 
         anyhow::bail!(
-            "Échec du handshake SSPI après plusieurs tentatives (407 persistant)"
+            "SSPI handshake failed after multiple attempts (persistent 407)"
         )
     }
 
@@ -222,7 +222,7 @@ impl AuthHandler {
             let domain = std::env::var("USERDOMAIN").unwrap_or_default();
 
             if user.is_empty() {
-                anyhow::bail!("USERNAME introuvable dans l'environnement");
+                anyhow::bail!("USERNAME not found in environment");
             }
 
             if domain.is_empty() {
@@ -240,7 +240,7 @@ impl AuthHandler {
 
         if password.is_empty() {
             anyhow::bail!(
-                "Mode WindowsCurrentCredentials: mot de passe introuvable. Définis proxy_password ou WINFOOM_PROXY_PASSWORD"
+                "WindowsCurrentCredentials mode: password not found. Set proxy_password or WINFOOM_PROXY_PASSWORD"
             );
         }
 
@@ -294,11 +294,11 @@ impl WindowsSspiContext {
         let (package, scheme) = match protocol {
             HttpAuthProtocol::NTLM => ("NTLM", "NTLM"),
             HttpAuthProtocol::KERBEROS => ("Negotiate", "Negotiate"),
-            HttpAuthProtocol::BASIC => anyhow::bail!("SSPI non requis pour BASIC"),
+            HttpAuthProtocol::BASIC => anyhow::bail!("SSPI not required for BASIC"),
         };
 
         if proxy_host.trim().is_empty() {
-            anyhow::bail!("proxy_host vide pour handshake SSPI");
+            anyhow::bail!("proxy_host is empty for SSPI handshake");
         }
 
         let target_spn = format!("HTTP/{}", proxy_host);
@@ -329,7 +329,7 @@ impl WindowsSspiContext {
         };
 
         if status != 0 {
-            anyhow::bail!("AcquireCredentialsHandleW a échoué: 0x{:08X}", status as u32);
+            anyhow::bail!("AcquireCredentialsHandleW failed: 0x{:08X}", status as u32);
         }
 
         Ok(Self {
@@ -412,7 +412,7 @@ impl WindowsSspiContext {
         let continue_needed =
             status == windows_sys::Win32::Foundation::SEC_I_CONTINUE_NEEDED;
         if status != 0 && !continue_needed {
-            anyhow::bail!("InitializeSecurityContextW a échoué: 0x{:08X}", status as u32);
+            anyhow::bail!("InitializeSecurityContextW failed: 0x{:08X}", status as u32);
         }
 
         let token = if output_buffer.cbBuffer > 0 && !output_buffer.pvBuffer.is_null() {

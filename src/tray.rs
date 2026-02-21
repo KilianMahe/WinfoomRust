@@ -63,14 +63,14 @@ thread_local! {
 impl TrayController {
     #[cfg(windows)]
     fn tray_icon_handle() -> HICON {
-        // Icône embarquée directement dans le binaire
+        // Icon embedded directly in the binary
         const ICON_DATA: &[u8] = include_bytes!("../assets/icon.ico");
 
-        // Créer un fichier temporaire pour charger l'icône
+        // Create a temporary file to load the icon
         let temp_dir = std::env::temp_dir();
         let icon_path = temp_dir.join("winfoomrust_tray_icon.ico");
 
-        // Écrire l'icône embarquée dans le fichier temporaire
+        // Write embedded icon to temporary file
         if let Ok(_) = std::fs::write(&icon_path, ICON_DATA) {
             let wide: Vec<u16> = icon_path
                 .as_os_str()
@@ -91,16 +91,16 @@ impl TrayController {
             };
 
             if !handle.is_null() {
-                // Nettoyage du fichier temporaire
+                // Cleanup temporary file
                 let _ = std::fs::remove_file(&icon_path);
                 return handle;
             }
 
-            // Si le chargement échoue, nettoyer quand même
+                // If loading fails, clean up anyway
             let _ = std::fs::remove_file(&icon_path);
         }
 
-        // Fallback : utiliser l'icône par défaut de Windows
+        // Fallback: use the default Windows icon
         unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) }
     }
 
@@ -113,13 +113,13 @@ impl TrayController {
 
         let worker = thread::spawn(move || {
             if let Err(e) = run_tray_loop(tx_thread, wake_thread, ready_tx) {
-                tracing::error!("Erreur boucle tray: {}", e);
+                tracing::error!("Tray loop error: {}", e);
             }
         });
 
         let hwnd = ready_rx
             .recv()
-            .map_err(|_| "Impossible d'initialiser le thread tray".to_string())??;
+            .map_err(|_| "Unable to initialize tray thread".to_string())??;
 
         Ok((
             Self {
@@ -251,8 +251,8 @@ fn run_tray_loop(
     unsafe {
         let hinstance = GetModuleHandleW(ptr::null());
         if hinstance.is_null() {
-            let _ = ready_tx.send(Err("GetModuleHandleW a échoué".to_string()));
-            return Err("GetModuleHandleW a échoué".to_string());
+            let _ = ready_tx.send(Err("GetModuleHandleW failed".to_string()));
+            return Err("GetModuleHandleW failed".to_string());
         }
 
         let class_name = to_wide("winfoom_tray_window");
@@ -278,24 +278,24 @@ fn run_tray_loop(
         );
 
         if hwnd.is_null() {
-            let _ = ready_tx.send(Err("CreateWindowExW a échoué".to_string()));
-            return Err("CreateWindowExW a échoué".to_string());
+            let _ = ready_tx.send(Err("CreateWindowExW failed".to_string()));
+            return Err("CreateWindowExW failed".to_string());
         }
 
         let hmenu = CreatePopupMenu();
         if hmenu.is_null() {
-            let _ = ready_tx.send(Err("CreatePopupMenu a échoué".to_string()));
-            return Err("CreatePopupMenu a échoué".to_string());
+            let _ = ready_tx.send(Err("CreatePopupMenu failed".to_string()));
+            return Err("CreatePopupMenu failed".to_string());
         }
 
-        if AppendMenuW(hmenu, MF_STRING, MENU_OPEN_ID, to_wide("Ouvrir").as_ptr()) == 0 {
-            let _ = ready_tx.send(Err("Ajout menu 'Ouvrir' impossible".to_string()));
-            return Err("Ajout menu 'Ouvrir' impossible".to_string());
+        if AppendMenuW(hmenu, MF_STRING, MENU_OPEN_ID, to_wide("Open").as_ptr()) == 0 {
+            let _ = ready_tx.send(Err("Unable to add 'Open' menu item".to_string()));
+            return Err("Unable to add 'Open' menu item".to_string());
         }
 
-        if AppendMenuW(hmenu, MF_STRING, MENU_EXIT_ID, to_wide("Quitter").as_ptr()) == 0 {
-            let _ = ready_tx.send(Err("Ajout menu 'Quitter' impossible".to_string()));
-            return Err("Ajout menu 'Quitter' impossible".to_string());
+        if AppendMenuW(hmenu, MF_STRING, MENU_EXIT_ID, to_wide("Quit").as_ptr()) == 0 {
+            let _ = ready_tx.send(Err("Unable to add 'Quit' menu item".to_string()));
+            return Err("Unable to add 'Quit' menu item".to_string());
         }
 
         TRAY_STATE.with(|state| {
@@ -316,8 +316,8 @@ fn run_tray_loop(
         nid.hIcon = TrayController::tray_icon_handle();
 
         if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
-            let _ = ready_tx.send(Err("Ajout icône tray impossible".to_string()));
-            return Err("Ajout icône tray impossible".to_string());
+            let _ = ready_tx.send(Err("Unable to add tray icon".to_string()));
+            return Err("Unable to add tray icon".to_string());
         }
 
         let _ = ready_tx.send(Ok(hwnd as isize));

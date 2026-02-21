@@ -1,4 +1,4 @@
-// Support pour Proxy Auto Config (PAC) — évaluateur intégré
+// Support for Proxy Auto Config (PAC) — built-in evaluator
 use anyhow::Result;
 use boa_engine::{Context, JsArgs, JsResult, JsValue, Source, js_string};
 use boa_engine::NativeFunction;
@@ -50,7 +50,7 @@ static SHARED_PAC_RESOLVER: Lazy<Mutex<Option<SharedResolverState>>> =
 impl PacResolver {
     pub fn shared(pac_url: &str, cache_ttl_seconds: u64, stale_ttl_seconds: u64) -> Result<Arc<Self>> {
         let mut guard = SHARED_PAC_RESOLVER.lock().map_err(|e| {
-            anyhow::anyhow!("Impossible d'acquérir le verrou du resolver PAC partagé: {}", e)
+            anyhow::anyhow!("Unable to acquire shared PAC resolver lock: {}", e)
         })?;
 
         if let Some(state) = guard.as_ref() {
@@ -73,10 +73,10 @@ impl PacResolver {
         Ok(resolver)
     }
 
-    /// Crée une nouvelle instance de PacResolver avec évaluateur JS intégré
+    /// Creates a new PacResolver instance with built-in JS evaluator
     pub fn new(pac_url: &str, cache_ttl_seconds: u64, stale_ttl_seconds: u64) -> Result<Self> {
         tracing::info!(
-            "Initialisation du PacResolver (pac_url={}, ttl={}s, stale={}s)",
+            "Initializing PacResolver (pac_url={}, ttl={}s, stale={}s)",
             pac_url,
             cache_ttl_seconds,
             stale_ttl_seconds
@@ -85,10 +85,10 @@ impl PacResolver {
         let cache_ttl = Duration::from_secs(cache_ttl_seconds.max(1));
         let stale_ttl = Duration::from_secs(stale_ttl_seconds.max(cache_ttl_seconds.max(1)));
 
-        // Charger le contenu du fichier PAC
+        // Load PAC file content
         let pac_script = load_pac_script(pac_url)?;
-        tracing::info!("Fichier PAC chargé ({} octets) depuis: {}", pac_script.len(), pac_url);
-        tracing::debug!("Contenu PAC:\n{}", pac_script);
+        tracing::info!("PAC file loaded ({} bytes) from: {}", pac_script.len(), pac_url);
+        tracing::debug!("PAC content:\n{}", pac_script);
 
         Ok(PacResolver {
             pac_script: Mutex::new(pac_script),
@@ -102,7 +102,7 @@ impl PacResolver {
         })
     }
 
-    /// Résout les proxies pour une URL donnée
+    /// Resolves proxies for a given URL
     pub async fn resolve(self: &Arc<Self>, url: &str) -> Result<Vec<String>> {
         let keys = cache_keys(url);
         let parent_key = keys.parent_key.clone();
@@ -116,7 +116,7 @@ impl PacResolver {
             {
                 if is_fresh {
                     tracing::debug!(
-                        "PAC cache hit (fresh) pour key={} (url={})",
+                        "PAC cache hit (fresh) for key={} (url={})",
                         keys.exact_key,
                         url
                     );
@@ -124,7 +124,7 @@ impl PacResolver {
                 }
 
                 tracing::debug!(
-                    "PAC cache hit (stale) pour key={} (url={}), refresh en arrière-plan",
+                    "PAC cache hit (stale) for key={} (url={}), background refresh",
                     keys.exact_key,
                     url
                 );
@@ -172,11 +172,11 @@ impl PacResolver {
         let (result, kind) = match resolved {
             Ok(Ok(proxies)) => (proxies, CacheEntryKind::Positive),
             Ok(Err(e)) => {
-                tracing::error!("Erreur lors de la résolution des proxies: {:?}", e);
+                tracing::error!("Error during proxy resolution: {:?}", e);
                 (vec!["DIRECT".to_string()], CacheEntryKind::Negative)
             }
             Err(e) => {
-                tracing::error!("Erreur task spawn_blocking PAC: {}", e);
+                tracing::error!("PAC spawn_blocking task error: {}", e);
                 (vec!["DIRECT".to_string()], CacheEntryKind::Negative)
             }
         };
@@ -194,60 +194,60 @@ impl PacResolver {
 
     fn resolve_blocking(&self, url: &str) -> Result<Vec<String>> {
         let pac_script = self.pac_script.lock().map_err(|e| {
-            anyhow::anyhow!("Impossible d'acquérir le verrou du script PAC: {}", e)
+            anyhow::anyhow!("Unable to acquire PAC script lock: {}", e)
         })?;
 
-        // Normalise l'URL : ajoute un '/' final si le chemin est vide
+        // Normalize URL: add trailing '/' if path is empty
         let normalized_url = normalize_url_path(url);
         let effective_url = normalized_url.as_deref().unwrap_or(url);
 
         if normalized_url.is_some() {
-            tracing::debug!("URL normalisée pour PAC: '{}' -> '{}'", url, effective_url);
+            tracing::debug!("URL normalized for PAC: '{}' -> '{}'", url, effective_url);
         }
 
-        // Extraire le host de l'URL
+        // Extract host from URL
         let host = extract_host(effective_url);
 
-        tracing::debug!("Évaluation PAC pour URL='{}', host='{}'", effective_url, host);
+        tracing::debug!("PAC evaluation for URL='{}', host='{}'", effective_url, host);
 
-        // Évaluer le script PAC avec boa_engine
+        // Evaluate PAC script with boa_engine
         let result = evaluate_pac_script(&pac_script, effective_url, &host)?;
 
         tracing::debug!("PAC FindProxyForURL('{}', '{}') => '{}'", effective_url, host, result);
 
-        // Parser le résultat PAC (ex: "PROXY proxy:8080; DIRECT")
+        // Parse PAC result (e.g.: "PROXY proxy:8080; DIRECT")
         let proxy_list = parse_pac_result(&result);
 
         if proxy_list.is_empty() {
-            tracing::warn!("Aucun proxy trouvé pour: {}", url);
+            tracing::warn!("No proxy found for: {}", url);
             Ok(vec!["DIRECT".to_string()])
         } else {
-            tracing::debug!("Proxies trouvés pour {}: {:?}", url, proxy_list);
+            tracing::debug!("Proxies found for {}: {:?}", url, proxy_list);
             Ok(proxy_list)
         }
     }
 }
 
-// ─── Chargement du fichier PAC ───────────────────────────────────────────────
+// ─── PAC file loading ───────────────────────────────────────────────────────────────
 
 fn load_pac_script(pac_url: &str) -> Result<String> {
     let trimmed = pac_url.trim();
 
     if trimmed.is_empty() {
-        return Err(anyhow::anyhow!("URL du fichier PAC vide"));
+        return Err(anyhow::anyhow!("PAC file URL is empty"));
     }
 
-    // URL distante (http/https)
+    // Remote URL (http/https)
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        tracing::info!("Téléchargement du fichier PAC depuis: {}", trimmed);
+        tracing::info!("Downloading PAC file from: {}", trimmed);
         let response = reqwest::blocking::get(trimmed)
-            .map_err(|e| anyhow::anyhow!("Erreur téléchargement PAC depuis {}: {}", trimmed, e))?;
+            .map_err(|e| anyhow::anyhow!("PAC download error from {}: {}", trimmed, e))?;
         let content = response.text()
-            .map_err(|e| anyhow::anyhow!("Erreur lecture contenu PAC depuis {}: {}", trimmed, e))?;
+            .map_err(|e| anyhow::anyhow!("PAC content read error from {}: {}", trimmed, e))?;
         return Ok(content);
     }
 
-    // Fichier local — convertir le chemin
+    // Local file — convert path
     let file_path = if trimmed.starts_with("file:///") {
         let path = trimmed.strip_prefix("file:///").unwrap();
         path.replace('/', "\\")
@@ -255,30 +255,30 @@ fn load_pac_script(pac_url: &str) -> Result<String> {
         let path = trimmed.strip_prefix("file://").unwrap();
         path.to_string()
     } else {
-        // Chemin brut (ex: C:\Users\...\file.pac)
+        // Raw path (e.g.: C:\Users\...\file.pac)
         trimmed.to_string()
     };
 
-    tracing::info!("Lecture du fichier PAC local: {}", file_path);
+    tracing::info!("Reading local PAC file: {}", file_path);
     let content = std::fs::read_to_string(&file_path)
-        .map_err(|e| anyhow::anyhow!("Erreur lecture fichier PAC '{}': {}", file_path, e))?;
+        .map_err(|e| anyhow::anyhow!("PAC file read error '{}': {}", file_path, e))?;
     Ok(content)
 }
 
-// ─── Évaluation JavaScript du PAC ────────────────────────────────────────────
+// ─── PAC JavaScript evaluation ──────────────────────────────────────────────────────────
 
 fn evaluate_pac_script(pac_script: &str, url: &str, host: &str) -> Result<String> {
     let mut context = Context::default();
 
-    // Enregistrer les fonctions helper PAC
+    // Register PAC helper functions
     register_pac_helpers(&mut context)?;
 
-    // Charger le script PAC
+    // Load the PAC script
     context
         .eval(Source::from_bytes(pac_script.as_bytes()))
-        .map_err(|e| anyhow::anyhow!("Erreur parsing script PAC: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("PAC script parsing error: {}", e))?;
 
-    // Appeler FindProxyForURL(url, host)
+    // Call FindProxyForURL(url, host)
     let call_script = format!(
         "FindProxyForURL(\"{}\", \"{}\")",
         url.replace('\\', "\\\\").replace('"', "\\\""),
@@ -287,11 +287,11 @@ fn evaluate_pac_script(pac_script: &str, url: &str, host: &str) -> Result<String
 
     let result = context
         .eval(Source::from_bytes(call_script.as_bytes()))
-        .map_err(|e| anyhow::anyhow!("Erreur exécution FindProxyForURL: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("FindProxyForURL execution error: {}", e))?;
 
     let result_str = result
         .to_string(&mut context)
-        .map_err(|e| anyhow::anyhow!("Erreur conversion résultat PAC en string: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("PAC result to string conversion error: {}", e))?;
 
     Ok(result_str.to_std_string_escaped())
 }
@@ -302,98 +302,98 @@ fn register_pac_helpers(context: &mut Context) -> Result<()> {
         js_string!("isPlainHostName"),
         1,
         NativeFunction::from_fn_ptr(pac_is_plain_host_name),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement isPlainHostName: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering isPlainHostName: {}", e))?;
 
     // dnsDomainIs(host, domain)
     context.register_global_builtin_callable(
         js_string!("dnsDomainIs"),
         2,
         NativeFunction::from_fn_ptr(pac_dns_domain_is),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement dnsDomainIs: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering dnsDomainIs: {}", e))?;
 
     // localHostOrDomainIs(host, hostdom)
     context.register_global_builtin_callable(
         js_string!("localHostOrDomainIs"),
         2,
         NativeFunction::from_fn_ptr(pac_local_host_or_domain_is),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement localHostOrDomainIs: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering localHostOrDomainIs: {}", e))?;
 
     // isResolvable(host)
     context.register_global_builtin_callable(
         js_string!("isResolvable"),
         1,
         NativeFunction::from_fn_ptr(pac_is_resolvable),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement isResolvable: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering isResolvable: {}", e))?;
 
     // isInNet(host, pattern, mask)
     context.register_global_builtin_callable(
         js_string!("isInNet"),
         3,
         NativeFunction::from_fn_ptr(pac_is_in_net),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement isInNet: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering isInNet: {}", e))?;
 
     // dnsResolve(host)
     context.register_global_builtin_callable(
         js_string!("dnsResolve"),
         1,
         NativeFunction::from_fn_ptr(pac_dns_resolve),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement dnsResolve: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering dnsResolve: {}", e))?;
 
     // myIpAddress()
     context.register_global_builtin_callable(
         js_string!("myIpAddress"),
         0,
         NativeFunction::from_fn_ptr(pac_my_ip_address),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement myIpAddress: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering myIpAddress: {}", e))?;
 
     // dnsDomainLevels(host)
     context.register_global_builtin_callable(
         js_string!("dnsDomainLevels"),
         1,
         NativeFunction::from_fn_ptr(pac_dns_domain_levels),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement dnsDomainLevels: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering dnsDomainLevels: {}", e))?;
 
     // shExpMatch(str, shexp)
     context.register_global_builtin_callable(
         js_string!("shExpMatch"),
         2,
         NativeFunction::from_fn_ptr(pac_sh_exp_match),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement shExpMatch: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering shExpMatch: {}", e))?;
 
     // weekdayRange(...)
     context.register_global_builtin_callable(
         js_string!("weekdayRange"),
         3,
         NativeFunction::from_fn_ptr(pac_weekday_range),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement weekdayRange: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering weekdayRange: {}", e))?;
 
     // dateRange(...)
     context.register_global_builtin_callable(
         js_string!("dateRange"),
         7,
         NativeFunction::from_fn_ptr(pac_date_range),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement dateRange: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering dateRange: {}", e))?;
 
     // timeRange(...)
     context.register_global_builtin_callable(
         js_string!("timeRange"),
         7,
         NativeFunction::from_fn_ptr(pac_time_range),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement timeRange: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering timeRange: {}", e))?;
 
     // alert(msg)
     context.register_global_builtin_callable(
         js_string!("alert"),
         1,
         NativeFunction::from_fn_ptr(pac_alert),
-    ).map_err(|e| anyhow::anyhow!("Erreur enregistrement alert: {}", e))?;
+    ).map_err(|e| anyhow::anyhow!("Error registering alert: {}", e))?;
 
     Ok(())
 }
 
-// ─── Implémentation des fonctions helper PAC ─────────────────────────────────
+// ─── PAC helper function implementations ─────────────────────────────────────────────
 
-/// isPlainHostName(host) — true si le hostname ne contient pas de point
+/// isPlainHostName(host) — true if hostname does not contain a dot
 fn pac_is_plain_host_name(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let host = args.get_or_undefined(0)
         .to_string(context)?
@@ -401,7 +401,7 @@ fn pac_is_plain_host_name(_this: &JsValue, args: &[JsValue], context: &mut Conte
     Ok(JsValue::Boolean(!host.contains('.')))
 }
 
-/// dnsDomainIs(host, domain) — true si le host se termine par domain
+/// dnsDomainIs(host, domain) — true if host ends with domain
 fn pac_dns_domain_is(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let host = args.get_or_undefined(0)
         .to_string(context)?
@@ -427,7 +427,7 @@ fn pac_local_host_or_domain_is(_this: &JsValue, args: &[JsValue], context: &mut 
     Ok(JsValue::Boolean(host == hostdom || hostdom.starts_with(&format!("{}.", host))))
 }
 
-/// isResolvable(host) — true si le hostname peut être résolu par DNS
+/// isResolvable(host) — true if hostname can be resolved via DNS
 fn pac_is_resolvable(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let host = args.get_or_undefined(0)
         .to_string(context)?
@@ -439,7 +439,7 @@ fn pac_is_resolvable(_this: &JsValue, args: &[JsValue], context: &mut Context) -
     Ok(JsValue::Boolean(resolvable))
 }
 
-/// isInNet(host, pattern, mask) — true si l'IP résolue est dans le sous-réseau
+/// isInNet(host, pattern, mask) — true if resolved IP is in the subnet
 fn pac_is_in_net(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let host = args.get_or_undefined(0)
         .to_string(context)?
@@ -466,7 +466,7 @@ fn pac_is_in_net(_this: &JsValue, args: &[JsValue], context: &mut Context) -> Js
     Ok(JsValue::Boolean(result.unwrap_or(false)))
 }
 
-/// dnsResolve(host) — résout le hostname en adresse IP
+/// dnsResolve(host) — resolves hostname to IP address
 fn pac_dns_resolve(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let host = args.get_or_undefined(0)
         .to_string(context)?
@@ -478,13 +478,13 @@ fn pac_dns_resolve(_this: &JsValue, args: &[JsValue], context: &mut Context) -> 
     }
 }
 
-/// myIpAddress() — retourne l'adresse IP locale
+/// myIpAddress() — returns the local IP address
 fn pac_my_ip_address(_this: &JsValue, _args: &[JsValue], _context: &mut Context) -> JsResult<JsValue> {
     let ip = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
     Ok(JsValue::String(js_string!(ip)))
 }
 
-/// dnsDomainLevels(host) — retourne le nombre de points dans le hostname
+/// dnsDomainLevels(host) — returns the number of dots in the hostname
 fn pac_dns_domain_levels(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let host = args.get_or_undefined(0)
         .to_string(context)?
@@ -506,22 +506,22 @@ fn pac_sh_exp_match(_this: &JsValue, args: &[JsValue], context: &mut Context) ->
     Ok(JsValue::Boolean(matched))
 }
 
-/// weekdayRange — simplifié, retourne toujours true
+/// weekdayRange — simplified, always returns true
 fn pac_weekday_range(_this: &JsValue, _args: &[JsValue], _context: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::Boolean(true))
 }
 
-/// dateRange — simplifié, retourne toujours true
+/// dateRange — simplified, always returns true
 fn pac_date_range(_this: &JsValue, _args: &[JsValue], _context: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::Boolean(true))
 }
 
-/// timeRange — simplifié, retourne toujours true
+/// timeRange — simplified, always returns true
 fn pac_time_range(_this: &JsValue, _args: &[JsValue], _context: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::Boolean(true))
 }
 
-/// alert(msg) — log le message pour le debug
+/// alert(msg) — logs the message for debugging
 fn pac_alert(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let msg = args.get_or_undefined(0)
         .to_string(context)?
@@ -530,11 +530,11 @@ fn pac_alert(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResu
     Ok(JsValue::undefined())
 }
 
-// ─── Fonctions utilitaires ───────────────────────────────────────────────────
+// ─── Utility functions ─────────────────────────────────────────────────────────────
 
-/// Implémentation de shExpMatch (shell expression / glob matching)
+/// Implementation of shExpMatch (shell expression / glob matching)
 fn sh_exp_match(s: &str, pattern: &str) -> bool {
-    // Convertir le pattern glob en regex
+    // Convert glob pattern to regex
     let mut regex_str = String::from("^");
     for ch in pattern.chars() {
         match ch {
@@ -557,7 +557,7 @@ fn sh_exp_match(s: &str, pattern: &str) -> bool {
     }
 }
 
-/// Résolution DNS host -> IPv4
+/// DNS resolution host -> IPv4
 fn resolve_host_to_ipv4(host: &str) -> Option<std::net::Ipv4Addr> {
     if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
         return Some(ip);
@@ -573,7 +573,7 @@ fn resolve_host_to_ipv4(host: &str) -> Option<std::net::Ipv4Addr> {
         .next()
 }
 
-/// Obtenir l'adresse IP locale
+/// Get the local IP address
 fn get_local_ip() -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:53").ok()?;
@@ -581,7 +581,7 @@ fn get_local_ip() -> Option<String> {
     Some(local_addr.ip().to_string())
 }
 
-/// Extraire le host d'une URL
+/// Extract the host from a URL
 fn extract_host(url: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url) {
         if let Some(host) = parsed.host_str() {
@@ -591,7 +591,7 @@ fn extract_host(url: &str) -> String {
     url.to_string()
 }
 
-/// Parser le résultat PAC (ex: "PROXY proxy:8080; DIRECT" -> vec!["PROXY proxy:8080", "DIRECT"])
+/// Parse PAC result (e.g.: "PROXY proxy:8080; DIRECT" -> vec!["PROXY proxy:8080", "DIRECT"])
 fn parse_pac_result(result: &str) -> Vec<String> {
     result
         .split(';')
@@ -704,7 +704,7 @@ fn put_cache_in_state(
     }
 }
 
-/// Normalise le chemin d'une URL : si le chemin est vide, ajoute un `/` final.
+/// Normalizes the URL path: if the path is empty, adds a trailing `/`.
 fn normalize_url_path(url: &str) -> Option<String> {
     if let Ok(mut parsed) = url::Url::parse(url) {
         if parsed.path().is_empty() || parsed.path() == "" {

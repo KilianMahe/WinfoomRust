@@ -1,4 +1,4 @@
-// Interface graphique avec egui
+// Graphical interface with egui
 use crate::config::{Config, ProxyType, HttpAuthProtocol};
 use crate::pac::PacResolver;
 use crate::proxy::ProxyServer;
@@ -39,7 +39,7 @@ impl WinfoomrustApp {
             config,
             proxy_server: Arc::new(TokioMutex::new(None)),
             is_running: false,
-            status_message: "Proxy arrêté".to_string(),
+            status_message: "Proxy stopped".to_string(),
             error_message: Arc::new(Mutex::new(String::new())),
             show_password: false,
             runtime: tokio::runtime::Runtime::new().unwrap(),
@@ -70,24 +70,24 @@ impl WinfoomrustApp {
             
             match server.start().await {
                 Ok(_) => {
-                    tracing::info!("Serveur proxy démarré");
-                    // Sauvegarder la configuration
+                    tracing::info!("Proxy server started");
+                    // Save configuration
                     if let Err(e) = config.save() {
-                        tracing::warn!("Erreur sauvegarde configuration: {}", e);
+                        tracing::warn!("Configuration save error: {}", e);
                     } else {
-                        tracing::info!("Configuration sauvegardée");
+                        tracing::info!("Configuration saved");
                     }
-                    // Effacer les erreurs précédentes
+                    // Clear previous errors
                     let mut err = error_msg.lock().unwrap();
                     err.clear();
                 }
                 Err(e) => {
-                    let error_str = format!("Erreur démarrage proxy: {}", e);
+                    let error_str = format!("Proxy start error: {}", e);
                     tracing::error!("{}", error_str);
-                    // Stocker l'erreur pour l'afficher dans l'interface
+                    // Store error for display in the interface
                     let mut err = error_msg.lock().unwrap();
                     *err = error_str;
-                    return; // Ne pas marquer comme running si ça échoue
+                    return; // Don't mark as running if it fails
                 }
             }
             
@@ -98,14 +98,14 @@ impl WinfoomrustApp {
         self.is_running = true;
         if unsupported_ntlm_sspi {
             self.status_message = format!(
-                "Proxy démarré sur le port {} — NTLM/SSPI non supporté actuellement",
+                "Proxy started on port {} — NTLM/SSPI not currently supported",
                 self.config.local_port
             );
             tracing::warn!(
-                "Mode NTLM/SSPI détecté: handshake complet non implémenté"
+                "NTLM/SSPI mode detected: full handshake not implemented"
             );
         } else {
-            self.status_message = format!("Proxy démarré sur le port {}", self.config.local_port);
+            self.status_message = format!("Proxy started on port {}", self.config.local_port);
         }
     }
 
@@ -121,21 +121,21 @@ impl WinfoomrustApp {
         });
         
         self.is_running = false;
-        self.status_message = "Proxy arrêté".to_string();
+        self.status_message = "Proxy stopped".to_string();
     }
 
     async fn test_connection(url: &str, local_port: u16) -> Result<String, String> {
         if url.is_empty() {
-            return Err("URL de test vide".to_string());
+            return Err("Test URL is empty".to_string());
         }
 
-        // Créer un client HTTP qui utilise le proxy local
+        // Create an HTTP client that uses the local proxy
         let proxy_url = format!("http://127.0.0.1:{}", local_port);
         let client = reqwest::Client::builder()
-            .proxy(reqwest::Proxy::http(&proxy_url).map_err(|e| format!("Erreur proxy: {}", e))?)
+            .proxy(reqwest::Proxy::http(&proxy_url).map_err(|e| format!("Proxy error: {}", e))?)
             .timeout(std::time::Duration::from_secs(10))
             .build()
-            .map_err(|e| format!("Erreur création client: {}", e))?;
+            .map_err(|e| format!("Client creation error: {}", e))?;
 
         match client.get(url).send().await {
             Ok(response) => {
@@ -146,7 +146,7 @@ impl WinfoomrustApp {
                 ))
             }
             Err(e) => {
-                Err(format!("Erreur requête: {}", e))
+                Err(format!("Request error: {}", e))
             }
         }
     }
@@ -158,12 +158,12 @@ impl WinfoomrustApp {
         stale_ttl_seconds: u64,
     ) -> Result<PacSelectionInfo, String> {
         let resolver = PacResolver::shared(pac_url, cache_ttl_seconds, stale_ttl_seconds)
-            .map_err(|e| format!("Erreur initialisation PAC: {}", e))?;
+            .map_err(|e| format!("PAC initialization error: {}", e))?;
 
         let entries = resolver
             .resolve(url)
             .await
-            .map_err(|e| format!("Erreur résolution PAC: {}", e))?;
+            .map_err(|e| format!("PAC resolution error: {}", e))?;
 
         let raw_entries = entries.clone();
 
@@ -238,14 +238,14 @@ impl WinfoomrustApp {
     fn open_logs_directory() -> Result<(), String> {
         let logs_dir = Self::logs_directory();
         std::fs::create_dir_all(&logs_dir)
-            .map_err(|e| format!("Impossible de créer le dossier de logs: {}", e))?;
+            .map_err(|e| format!("Unable to create logs folder: {}", e))?;
 
         #[cfg(target_os = "windows")]
         {
             Command::new("explorer")
                 .arg(&logs_dir)
                 .spawn()
-                .map_err(|e| format!("Impossible d'ouvrir le dossier de logs: {}", e))?;
+                .map_err(|e| format!("Unable to open logs folder: {}", e))?;
         }
 
         #[cfg(target_os = "macos")]
@@ -253,7 +253,7 @@ impl WinfoomrustApp {
             Command::new("open")
                 .arg(&logs_dir)
                 .spawn()
-                .map_err(|e| format!("Impossible d'ouvrir le dossier de logs: {}", e))?;
+                .map_err(|e| format!("Unable to open logs folder: {}", e))?;
         }
 
         #[cfg(all(unix, not(target_os = "macos")))]
@@ -261,7 +261,7 @@ impl WinfoomrustApp {
             Command::new("xdg-open")
                 .arg(&logs_dir)
                 .spawn()
-                .map_err(|e| format!("Impossible d'ouvrir le dossier de logs: {}", e))?;
+                .map_err(|e| format!("Unable to open logs folder: {}", e))?;
         }
 
         Ok(())
@@ -269,11 +269,11 @@ impl WinfoomrustApp {
 
     fn restart_application() -> Result<(), String> {
         let exe_path = std::env::current_exe()
-            .map_err(|e| format!("Impossible de déterminer l'exécutable courant: {}", e))?;
+            .map_err(|e| format!("Unable to determine current executable: {}", e))?;
 
         Command::new(exe_path)
             .spawn()
-            .map_err(|e| format!("Impossible de redémarrer l'application: {}", e))?;
+            .map_err(|e| format!("Unable to restart the application: {}", e))?;
 
         Ok(())
     }
@@ -292,7 +292,7 @@ impl eframe::App for WinfoomrustApp {
                 }
                 Err(e) => {
                     tracing::error!("{}", e);
-                    self.status_message = "Erreur initialisation tray".to_string();
+                    self.status_message = "Tray initialization error".to_string();
                 }
             }
         }
@@ -318,10 +318,10 @@ impl eframe::App for WinfoomrustApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            self.status_message = "Application minimisée dans la zone de notification".to_string();
+            self.status_message = "Application minimized to notification area".to_string();
         }
 
-        // Au premier affichage, vérifier l'autostart
+        // On first display, check autostart
         if !self.initialized {
             self.initialized = true;
             if self.config.start_minimized {
@@ -333,12 +333,12 @@ impl eframe::App for WinfoomrustApp {
             }
         }
         
-        // Vérifier si le test a un résultat à afficher
+        // Check if test has a result to display
         if let Some(result) = self.test_result.lock().unwrap().take() {
             self.status_message = result;
         }
         
-        // Vérifier s'il y a un message d'erreur à afficher
+        // Check if there's an error message to display
         let error_display = {
             let err = self.error_message.lock().unwrap();
             let msg = err.clone();
@@ -348,32 +348,32 @@ impl eframe::App for WinfoomrustApp {
             }
             msg
         };
-        // Menu supérieur
+        // Top menu
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                ui.menu_button("Fichier", |ui| {
-                    if ui.button("Sauvegarder configuration").clicked() {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Save configuration").clicked() {
                         match self.config.save() {
                             Ok(_) => {
-                                self.status_message = "Configuration sauvegardée".to_string();
-                                tracing::info!("Configuration sauvegardée");
+                                self.status_message = "Configuration saved".to_string();
+                                tracing::info!("Configuration saved");
                             }
                             Err(e) => {
-                                self.status_message = format!("Erreur: {}", e);
-                                tracing::error!("Erreur sauvegarde config: {}", e);
+                                self.status_message = format!("Error: {}", e);
+                                tracing::error!("Config save error: {}", e);
                             }
                         }
                         ui.close_menu();
                     }
                     
-                    if ui.button("Recharger configuration").clicked() {
+                    if ui.button("Reload configuration").clicked() {
                         match Config::load() {
                             Ok(config) => {
                                 self.config = config;
-                                self.status_message = "Configuration rechargée".to_string();
+                                self.status_message = "Configuration reloaded".to_string();
                             }
                             Err(e) => {
-                                self.status_message = format!("Erreur: {}", e);
+                                self.status_message = format!("Error: {}", e);
                             }
                         }
                         ui.close_menu();
@@ -381,27 +381,27 @@ impl eframe::App for WinfoomrustApp {
                     
                     ui.separator();
                     
-                    if ui.button("Quitter").clicked() {
+                    if ui.button("Quit").clicked() {
                         self.allow_exit = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
 
-                ui.menu_button("Aide", |ui| {
-                    if ui.button("Ouvrir le dossier des logs").clicked() {
+                ui.menu_button("Help", |ui| {
+                    if ui.button("Open logs folder").clicked() {
                         match Self::open_logs_directory() {
                             Ok(_) => {
-                                self.status_message = "Ouverture du dossier des logs...".to_string();
+                                self.status_message = "Opening logs folder...".to_string();
                             }
                             Err(e) => {
-                                self.status_message = format!("Erreur: {}", e);
+                                self.status_message = format!("Error: {}", e);
                                 tracing::error!("{}", e);
                             }
                         }
                         ui.close_menu();
                     }
 
-                    if ui.button("À propos").clicked() {
+                    if ui.button("About").clicked() {
                         self.status_message = "WinfoomRust v0.5.0 - Proxy Facade".to_string();
                         ui.close_menu();
                     }
@@ -409,7 +409,7 @@ impl eframe::App for WinfoomrustApp {
             });
         });
 
-        // Panneau latéral pour les contrôles
+        // Side panel for controls
         let screen_width = ctx.input(|i| i.screen_rect().width());
         let side_default_width = (screen_width * 0.30).clamp(220.0, 360.0);
         let side_max_width = (screen_width * 0.55).clamp(300.0, 520.0);
@@ -420,17 +420,17 @@ impl eframe::App for WinfoomrustApp {
             .min_width(200.0)
             .max_width(side_max_width)
             .show(ctx, |ui| {
-                ui.heading("Contrôles");
+                ui.heading("Controls");
                 ui.separator();
 
-                // Bouton Start/Stop
+                // Start/Stop button
                 ui.horizontal(|ui| {
                     if self.is_running {
-                        if ui.button("⏹ Arrêter le proxy").clicked() {
+                        if ui.button("⏹ Stop proxy").clicked() {
                             self.stop_proxy();
                         }
                     } else {
-                        if ui.button("▶ Démarrer le proxy").clicked() {
+                        if ui.button("▶ Start proxy").clicked() {
                             self.start_proxy();
                         }
                     }
@@ -438,7 +438,7 @@ impl eframe::App for WinfoomrustApp {
 
                 ui.add_space(10.0);
 
-                // Status et Type de proxy
+                // Status and Proxy type
                 ui.group(|ui| {
                     ui.label("Status:");
                     ui.colored_label(
@@ -447,17 +447,17 @@ impl eframe::App for WinfoomrustApp {
                         } else { 
                             egui::Color32::RED 
                         },
-                        if self.is_running { "● Actif" } else { "● Inactif" }
+                        if self.is_running { "● Active" } else { "● Inactive" }
                     );
                     
-                    // Afficher les erreurs s'il y en a
+                    // Display errors if any
                     if !error_display.is_empty() {
                         ui.add_space(8.0);
                         ui.colored_label(
                             egui::Color32::RED,
                             format!("[WARNING] {}", error_display)
                         );
-                        if ui.button("Effacer l'erreur").clicked() {
+                        if ui.button("Clear error").clicked() {
                             let mut err = self.error_message.lock().unwrap();
                             err.clear();
                         }
@@ -465,7 +465,7 @@ impl eframe::App for WinfoomrustApp {
                     
                     ui.add_space(5.0);
                     
-                    ui.label("Type de proxy en cours:");
+                    ui.label("Current proxy type:");
                     let proxy_type_str = match self.config.proxy_type {
                         ProxyType::HTTP => "HTTP",
                         ProxyType::SOCKS4 => "SOCKS4",
@@ -479,23 +479,23 @@ impl eframe::App for WinfoomrustApp {
                 ui.add_space(10.0);
                 ui.separator();
 
-                // Port local
-                ui.label("Port local:");
+                // Local port
+                ui.label("Local port:");
                 ui.add(egui::DragValue::new(&mut self.config.local_port)
                     .speed(1)
                     .range(1024..=65535));
 
                 ui.add_space(5.0);
 
-                // URL de test
-                ui.label("URL de test:");
+                // Test URL
+                ui.label("Test URL:");
                 ui.text_edit_singleline(&mut self.config.proxy_test_url);
 
                 ui.add_space(10.0);
 
-                // Bouton de test
-                if ui.button("Tester la connexion").clicked() {
-                    self.status_message = "Test en cours...".to_string();
+                // Test button
+                if ui.button("Test connection").clicked() {
+                    self.status_message = "Testing...".to_string();
                     let test_url = self.config.proxy_test_url.clone();
                     let local_port = self.config.local_port;
                     let proxy_type = self.config.proxy_type.clone();
@@ -517,7 +517,7 @@ impl eframe::App for WinfoomrustApp {
                                 Ok(info) => Some(info),
                                 Err(e) => Some(PacSelectionInfo {
                                     query_url: test_url.clone(),
-                                    selected_proxy: format!("indisponible ({})", e),
+                                    selected_proxy: format!("unavailable ({})", e),
                                     raw_entries: Vec::new(),
                                 }),
                             }
@@ -534,14 +534,14 @@ impl eframe::App for WinfoomrustApp {
                                         format!("[{}]", pac.raw_entries.join(", "))
                                     };
                                     format!(
-                                        "✓ Connexion réussie: {} | URL envoyée au PAC: {} | PAC brut: {} | Proxy PAC sélectionné: {}",
+                                        "✓ Connection successful: {} | URL sent to PAC: {} | Raw PAC: {} | Selected PAC proxy: {}",
                                         info,
                                         pac.query_url,
                                         raw,
                                         pac.selected_proxy
                                     )
                                 } else {
-                                    format!("✓ Connexion réussie: {}", info)
+                                    format!("✓ Connection successful: {}", info)
                                 };
                                 tracing::info!("{}", msg);
                                 let mut result = test_result.lock().unwrap();
@@ -555,14 +555,14 @@ impl eframe::App for WinfoomrustApp {
                                         format!("[{}]", pac.raw_entries.join(", "))
                                     };
                                     format!(
-                                        "✗ Erreur: {} | URL envoyée au PAC: {} | PAC brut: {} | Proxy PAC sélectionné: {}",
+                                        "✗ Error: {} | URL sent to PAC: {} | Raw PAC: {} | Selected PAC proxy: {}",
                                         e,
                                         pac.query_url,
                                         raw,
                                         pac.selected_proxy
                                     )
                                 } else {
-                                    format!("✗ Erreur: {}", e)
+                                    format!("✗ Error: {}", e)
                                 };
                                 tracing::error!("{}", msg);
                                 let mut result = test_result.lock().unwrap();
@@ -573,17 +573,17 @@ impl eframe::App for WinfoomrustApp {
                 }
             });
 
-        // Panneau central pour la configuration
+        // Central panel for configuration
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Configuration du Proxy");
+            ui.heading("Proxy Configuration");
             ui.separator();
 
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.add_space(10.0);
 
-                // Type de proxy
+                // Proxy type
                 ui.horizontal(|ui| {
-                    ui.label("Type de proxy:");
+                    ui.label("Proxy type:");
                     ui.add_space(20.0);
                     
                     if ui.selectable_label(
@@ -624,15 +624,15 @@ impl eframe::App for WinfoomrustApp {
 
                 ui.add_space(15.0);
 
-                // Configuration selon le type
+                // Configuration by type
                 match self.config.proxy_type {
                     ProxyType::HTTP | ProxyType::SOCKS4 | ProxyType::SOCKS5 => {
                         ui.group(|ui| {
-                            ui.label("Configuration du proxy upstream:");
+                            ui.label("Upstream proxy configuration:");
                             
                             ui.add_space(5.0);
                             ui.horizontal(|ui| {
-                                ui.label("Hôte:");
+                                ui.label("Host:");
                                 ui.text_edit_singleline(&mut self.config.proxy_host);
                             });
                             
@@ -646,16 +646,16 @@ impl eframe::App for WinfoomrustApp {
 
                         ui.add_space(10.0);
 
-                        // Authentification
+                        // Authentication
                         if matches!(self.config.proxy_type, ProxyType::HTTP) {
                             ui.group(|ui| {
-                                ui.label("Authentification:");
+                                ui.label("Authentication:");
                                 
                                 #[cfg(windows)]
                                 {
                                     ui.checkbox(
                                         &mut self.config.use_current_credentials,
-                                        "Utiliser les credentials Windows actuels"
+                                        "Use current Windows credentials"
                                     );
                                 }
 
@@ -663,12 +663,12 @@ impl eframe::App for WinfoomrustApp {
                                     ui.add_space(5.0);
                                     
                                     ui.horizontal(|ui| {
-                                        ui.label("Utilisateur:");
+                                        ui.label("Username:");
                                         ui.text_edit_singleline(&mut self.config.proxy_username);
                                     });
                                     
                                     ui.horizontal(|ui| {
-                                        ui.label("Mot de passe:");
+                                        ui.label("Password:");
                                         if self.show_password {
                                             ui.text_edit_singleline(&mut self.config.proxy_password);
                                         } else {
@@ -682,7 +682,7 @@ impl eframe::App for WinfoomrustApp {
 
                                     ui.add_space(5.0);
                                     ui.horizontal(|ui| {
-                                        ui.label("Protocole:");
+                                        ui.label("Protocol:");
                                         ui.selectable_value(
                                             &mut self.config.http_auth_protocol,
                                             HttpAuthProtocol::NTLM,
@@ -705,53 +705,53 @@ impl eframe::App for WinfoomrustApp {
                     }
                     ProxyType::PAC => {
                         ui.group(|ui| {
-                            ui.label("Configuration PAC:");
+                            ui.label("PAC Configuration:");
                             
                             ui.add_space(5.0);
                             ui.horizontal(|ui| {
-                                ui.label("Fichier/URL PAC:");
+                                ui.label("PAC File/URL:");
                                 ui.text_edit_singleline(&mut self.config.proxy_pac_file_location);
                             });
                             
                             ui.add_space(5.0);
-                            ui.label("💡 Peut être un chemin local ou une URL HTTP(S)");
+                            ui.label("💡 Can be a local path or an HTTP(S) URL");
                         });
                     }
                     ProxyType::DIRECT => {
-                        ui.label("Mode DIRECT - Pas de proxy upstream");
-                        ui.label("Les requêtes sont envoyées directement à leur destination.");
+                        ui.label("DIRECT mode - No upstream proxy");
+                        ui.label("Requests are sent directly to their destination.");
                     }
                 }
 
                 ui.add_space(15.0);
 
-                // Options avancées
-                ui.collapsing("Options avancées", |ui| {
+                // Advanced options
+                ui.collapsing("Advanced options", |ui| {
                     ui.add_space(5.0);
                     
                     ui.horizontal(|ui| {
-                        ui.label("Timeout socket (s):");
+                        ui.label("Socket timeout (s):");
                         ui.add(egui::DragValue::new(&mut self.config.socket_timeout)
                             .speed(1)
                             .range(5..=300));
                     });
                     
                     ui.horizontal(|ui| {
-                        ui.label("Timeout connexion (s):");
+                        ui.label("Connection timeout (s):");
                         ui.add(egui::DragValue::new(&mut self.config.connect_timeout)
                             .speed(1)
                             .range(5..=120));
                     });
                     
                     ui.horizontal(|ui| {
-                        ui.label("Timeout blacklist (s):");
+                        ui.label("Blacklist timeout (s):");
                         ui.add(egui::DragValue::new(&mut self.config.blacklist_timeout)
                             .speed(1)
                             .range(10..=300));
                     });
 
                     ui.horizontal(|ui| {
-                        ui.label("PAC cache frais (s):");
+                        ui.label("PAC fresh cache (s):");
                         ui.add(egui::DragValue::new(&mut self.config.pac_cache_ttl_seconds)
                             .speed(1)
                             .range(30..=600));
@@ -765,47 +765,47 @@ impl eframe::App for WinfoomrustApp {
                     });
 
                     ui.add_space(10.0);
-                    ui.checkbox(&mut self.config.autodetect, "Détection automatique des paramètres");
+                    ui.checkbox(&mut self.config.autodetect, "Automatic parameter detection");
                 });
 
-                // Paramètres de l'application
-                ui.collapsing("Paramètres de l'application", |ui| {
+                // Application settings
+                ui.collapsing("Application settings", |ui| {
                     ui.add_space(5.0);
 
-                    ui.checkbox(&mut self.config.autostart, "Démarrage automatique du proxy");
-                    ui.checkbox(&mut self.config.start_minimized, "Démarrer l'application minimisée");
+                    ui.checkbox(&mut self.config.autostart, "Auto-start proxy");
+                    ui.checkbox(&mut self.config.start_minimized, "Start application minimized");
 
                     ui.add_space(5.0);
                     ui.separator();
                     ui.add_space(5.0);
 
                     let mut debug_logs_enabled = self.config.log_level.eq_ignore_ascii_case("debug");
-                    if ui.checkbox(&mut debug_logs_enabled, "Activer les logs debug").changed() {
+                    if ui.checkbox(&mut debug_logs_enabled, "Enable debug logs").changed() {
                         self.config.log_level = if debug_logs_enabled {
                             "debug".to_string()
                         } else {
                             "info".to_string()
                         };
                         self.status_message = format!(
-                            "Niveau de log configuré: {} (redémarrage requis)",
+                            "Configured log level: {} (restart required)",
                             self.config.log_level
                         );
                     }
 
-                    ui.label(format!("Niveau de log configuré: {}", self.config.log_level));
+                    ui.label(format!("Configured log level: {}", self.config.log_level));
 
                     ui.add_space(5.0);
                     ui.separator();
                     ui.add_space(5.0);
 
-                    if ui.button("Redémarrer l'application").clicked() {
+                    if ui.button("Restart application").clicked() {
                         if let Err(e) = self.config.save() {
-                            self.status_message = format!("Erreur sauvegarde config: {}", e);
+                            self.status_message = format!("Config save error: {}", e);
                         } else {
                             match Self::restart_application() {
                                 Ok(_) => {
                                     self.allow_exit = true;
-                                    self.status_message = "Redémarrage de l'application...".to_string();
+                                    self.status_message = "Restarting the application...".to_string();
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }
                                 Err(e) => {
@@ -820,7 +820,7 @@ impl eframe::App for WinfoomrustApp {
             });
         });
 
-        // Barre de status en bas
+        // Bottom status bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Status:");
@@ -829,7 +829,7 @@ impl eframe::App for WinfoomrustApp {
         });
 
         if self.show_configuration_window {
-            // Les paramètres sont maintenant intégrés dans le panneau central
+            // Settings are now integrated in the central panel
             self.show_configuration_window = false;
         }
     }

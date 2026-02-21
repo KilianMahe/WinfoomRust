@@ -1,4 +1,4 @@
-// Serveur proxy HTTP
+// HTTP proxy server
 use crate::config::Config;
 use crate::config::HttpAuthProtocol;
 use crate::config::ProxyType;
@@ -37,7 +37,7 @@ impl ProxyServer {
             ) {
                 Ok(resolver) => Some(resolver),
                 Err(e) => {
-                    tracing::error!("Impossible d'initialiser PacResolver: {}", e);
+                    tracing::error!("Unable to initialize PacResolver: {}", e);
                     None
                 }
             }
@@ -56,7 +56,7 @@ impl ProxyServer {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        // Arrêter le serveur précédent s'il existe
+        // Stop previous server if it exists
         if self.server_handle.is_some() {
             self.stop().await?;
         }
@@ -66,7 +66,7 @@ impl ProxyServer {
         let addr = SocketAddr::from(([127, 0, 0, 1], config.local_port));
         drop(config);
 
-        tracing::info!("Démarrage du serveur proxy sur {}", addr);
+        tracing::info!("Starting proxy server on {}", addr);
 
         let listener = TcpListener::bind(addr).await?;
         
@@ -85,17 +85,17 @@ impl ProxyServer {
 
                 tokio::spawn(async move {
                     resolver.prewarm(&warmup_urls).await;
-                    tracing::info!("Préchargement PAC terminé");
+                    tracing::info!("PAC preloading completed");
                 });
             }
         }
         
-        // Lancer le serveur dans une tâche séparée
+        // Launch the server in a separate task
         let handle = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, client_addr)) => {
-                        tracing::debug!("Nouvelle connexion de {}", client_addr);
+                        tracing::debug!("New connection from {}", client_addr);
                         let config = Arc::clone(&config);
                         let auth_handler = Arc::clone(&auth_handler);
                         let pac_resolver = pac_resolver.clone();
@@ -105,7 +105,7 @@ impl ProxyServer {
                             let mut stream = stream;
                             let mut buffer = vec![0u8; 4096];
                             
-                            // Lire les données de la requête
+                            // Read request data
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(10),
                                 stream.read(&mut buffer)
@@ -114,14 +114,14 @@ impl ProxyServer {
                                     let request_str = String::from_utf8_lossy(&buffer[..n]);
                                     let first_line = request_str.lines().next().unwrap_or("");
                                     
-                                    // Détecter CONNECT
+                                    // Detect CONNECT
                                     if first_line.starts_with("CONNECT ") {
-                                        tracing::debug!("Détection requête CONNECT depuis {}", client_addr);
+                                        tracing::debug!("CONNECT request detected from {}", client_addr);
                                         
                                         // Extraire host:port
                                         if let Some(host_port) = extract_connect_host(first_line) {
                                             if is_dns_negative_cached(&dns_negative_cache, &host_port) {
-                                                let body = "CONNECT temporairement bloqué après erreur DNS récente";
+                                                let body = "CONNECT temporarily blocked after recent DNS error";
                                                 let response = format!(
                                                     "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
                                                     body.len(),
@@ -147,7 +147,7 @@ impl ProxyServer {
                                                     if is_dns_resolution_error(&e) {
                                                         remember_dns_negative_failure(&dns_negative_cache, &host_port);
                                                     }
-                                                    tracing::error!("Erreur tunnel CONNECT via upstream: {}", e);
+                                                    tracing::error!("CONNECT tunnel error via upstream: {}", e);
                                                     let body = format!("CONNECT upstream error: {}", e);
                                                     let response = format!(
                                                         "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
@@ -160,22 +160,22 @@ impl ProxyServer {
                                                 }
                                             };
 
-                                            // Envoyer "200 Connection Established" uniquement si tunnel prêt
+                                            // Send "200 Connection Established" only when tunnel is ready
                                             let response = b"HTTP/1.1 200 Connection Established\r\n\r\n";
                                             if let Err(e) = stream.write_all(response).await {
-                                                tracing::error!("Erreur envoi réponse CONNECT: {}", e);
+                                                tracing::error!("Error sending CONNECT response: {}", e);
                                                 return;
                                             }
                                             
                                             if let Err(e) = stream.flush().await {
-                                                tracing::error!("Erreur flush réponse CONNECT: {}", e);
+                                                tracing::error!("Error flushing CONNECT response: {}", e);
                                                 return;
                                             }
                                             
-                                            tracing::info!("Établissement tunnel CONNECT vers: {}", host_port);
+                                            tracing::info!("Establishing CONNECT tunnel to: {}", host_port);
                                             
-                                            // Maintenant faire le tunneling
-                                            tracing::debug!("Tunnel établi vers {} - démarrage du forwarding", host_port);
+                                            // Now do the tunneling
+                                            tracing::debug!("Tunnel established to {} - starting forwarding", host_port);
                                             
                                             let (mut client_read, mut client_write) = stream.split();
                                             let (mut server_read, mut server_write) = server_stream.split();
@@ -184,13 +184,13 @@ impl ProxyServer {
                                                 res = tokio::io::copy(&mut client_read, &mut server_write) => {
                                                     match res {
                                                         Ok(n) => tracing::debug!("Client->Server: {} bytes", n),
-                                                        Err(e) => tracing::debug!("Erreur Client->Server: {}", e),
+                                                        Err(e) => tracing::debug!("Error Client->Server: {}", e),
                                                     }
                                                 }
                                                 res = tokio::io::copy(&mut server_read, &mut client_write) => {
                                                     match res {
                                                         Ok(n) => tracing::debug!("Server->Client: {} bytes", n),
-                                                        Err(e) => tracing::debug!("Erreur Server->Client: {}", e),
+                                                        Err(e) => tracing::debug!("Error Server->Client: {}", e),
                                                     }
                                                 }
                                             };
@@ -198,24 +198,24 @@ impl ProxyServer {
                                             let _ = client_write.shutdown().await;
                                             let _ = server_write.shutdown().await;
                                             
-                                            tracing::debug!("Tunnel CONNECT vers {} fermé", host_port);
+                                            tracing::debug!("CONNECT tunnel to {} closed", host_port);
                                             return;
                                         }
                                         
-                                        tracing::error!("Erreur gestion tunnel CONNECT");
+                                        tracing::error!("CONNECT tunnel handling error");
                                         return;
                                     }
                                     
-                                    // Si ce n'est pas CONNECT, traiter comme requête HTTP
-                                    // Extraire méthode, URI et version
+                                    // If not CONNECT, treat as HTTP request
+                                    // Extract method, URI and version
                                     let parts: Vec<&str> = first_line.split_whitespace().collect();
                                     if parts.len() >= 2 {
                                         let method = parts[0];
                                         let uri = parts[1];
                                         
-                                        tracing::debug!("Requête HTTP: {} {}", method, uri);
+                                        tracing::debug!("HTTP request: {} {}", method, uri);
                                         
-                                        // Faire la requête directe
+    // Make the direct request
                                         let url = if uri.starts_with("http://") || uri.starts_with("https://") {
                                             uri.to_string()
                                         } else {
@@ -232,7 +232,7 @@ impl ProxyServer {
                                         {
                                             Ok(candidates) => candidates,
                                             Err(e) => {
-                                                tracing::error!("Erreur résolution des proxies upstream HTTP: {}", e);
+                                                tracing::error!("Error resolving upstream HTTP proxies: {}", e);
                                                 let body = format!("Proxy configuration error: {}", e);
                                                 let response = format!(
                                                     "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
@@ -253,7 +253,7 @@ impl ProxyServer {
                                             let candidate_label = proxy_candidate.as_deref().unwrap_or("DIRECT");
 
                                             tracing::debug!(
-                                                "Tentative HTTP {}/{} pour {} via {}",
+                                                "HTTP attempt {}/{} for {} via {}",
                                                 index + 1,
                                                 total,
                                                 url,
@@ -270,7 +270,7 @@ impl ProxyServer {
                                                 Ok(client) => client,
                                                 Err(e) => {
                                                     let err_msg = format!(
-                                                        "Création client impossible via {}: {}",
+                                                        "Client creation failed via {}: {}",
                                                         candidate_label,
                                                         e
                                                     );
@@ -290,7 +290,7 @@ impl ProxyServer {
                                                 }
                                                 Err(e) => {
                                                     let err_msg = format!(
-                                                        "Requête HTTP échouée via {}: {}",
+                                                        "HTTP request failed via {}: {}",
                                                         candidate_label,
                                                         e
                                                     );
@@ -301,11 +301,11 @@ impl ProxyServer {
                                         }
                                         
                                         if let Some(resp) = response {
-                                            // Construire la réponse HTTP
+                                            // Build the HTTP response
                                             let status = resp.status();
                                             let mut response_str = format!("HTTP/1.1 {}\r\n", status);
                                             
-                                            // Ajouter les headers importants
+                                            // Add important headers
                                             for (name, value) in resp.headers() {
                                                 if let Ok(val) = value.to_str() {
                                                     response_str.push_str(&format!("{}: {}\r\n", name, val));
@@ -313,20 +313,20 @@ impl ProxyServer {
                                             }
                                             response_str.push_str("\r\n");
                                             
-                                            // Envoyer les headers
+                                            // Send headers
                                             let _ = stream.write_all(response_str.as_bytes()).await;
                                             
-                                            // Envoyer le body
+                                            // Send body
                                             if let Ok(body) = resp.bytes().await {
                                                 let _ = stream.write_all(&body).await;
                                             }
                                             
                                             let _ = stream.flush().await;
-                                            tracing::debug!("Réponse HTTP envoyée: {} {}", status, uri);
+                                            tracing::debug!("HTTP response sent: {} {}", status, uri);
                                         } else {
                                             let body = format!(
                                                 "HTTP upstream error: {}",
-                                                last_error.unwrap_or_else(|| "Aucune tentative proxy n'a abouti".to_string())
+                                                last_error.unwrap_or_else(|| "No proxy attempt succeeded".to_string())
                                             );
                                             let response = format!(
                                                 "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
@@ -340,25 +340,25 @@ impl ProxyServer {
                                     return;
                                     }
                                 Ok(Ok(_)) => {
-                                    tracing::debug!("Connexion fermée immédiatement par {}", client_addr);
+                                    tracing::debug!("Connection closed immediately by {}", client_addr);
                                 }
                                 Ok(Err(e)) => {
-                                    tracing::error!("Erreur lecture depuis {}: {}", client_addr, e);
+                                    tracing::error!("Read error from {}: {}", client_addr, e);
                                 }
                                 Err(_) => {
-                                    tracing::warn!("Timeout lecture depuis {}", client_addr);
+                                    tracing::warn!("Read timeout from {}", client_addr);
                                 }
                             }
                         });
                     }
                     Err(e) => {
-                        tracing::error!("Erreur accept: {}", e);
+                        tracing::error!("Accept error: {}", e);
                         break;
                     }
                 }
             }
             
-            tracing::info!("Boucle serveur terminée");
+            tracing::info!("Server loop terminated");
         });
         
         self.server_handle = Some(handle);
@@ -366,24 +366,24 @@ impl ProxyServer {
     }
 
     pub async fn stop(&mut self) -> Result<()> {
-        tracing::info!("Arrêt du serveur proxy");
+        tracing::info!("Stopping proxy server");
         
-        // Annuler la tâche serveur
+        // Cancel the server task
         if let Some(handle) = self.server_handle.take() {
             handle.abort();
-            tracing::debug!("Tâche serveur annulée");
+            tracing::debug!("Server task cancelled");
         }
         
-        // Fermer le listener
+        // Close the listener
         if let Some(listener) = self.listener.take() {
             drop(listener);
-            tracing::debug!("Listener fermé");
+            tracing::debug!("Listener closed");
         }
         
-        // Attendre un peu pour que le port soit libéré
+        // Wait a bit for the port to be released
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         
-        tracing::info!("Serveur proxy arrêté");
+        tracing::info!("Proxy server stopped");
         Ok(())
     }
 
@@ -395,7 +395,7 @@ async fn create_forward_client_for_proxy(
     proxy_url: Option<&str>,
 ) -> Result<Client> {
     if let Some(proxy_url) = proxy_url {
-        tracing::debug!("Utilisation proxy upstream: {}", proxy_url);
+        tracing::debug!("Using upstream proxy: {}", proxy_url);
         return auth_handler.create_authenticated_client(&proxy_url).await;
     }
 
@@ -415,21 +415,21 @@ async fn build_upstream_proxy_candidates(
     match config.proxy_type {
         ProxyType::DIRECT => {
             tracing::debug!(
-                "Mode DIRECT pour URL {} -> aucun proxy upstream",
+                "DIRECT mode for URL {} -> no upstream proxy",
                 request_url
             );
             Ok(vec![None])
         }
         ProxyType::PAC => {
             let resolver = pac_resolver
-                .ok_or_else(|| anyhow::anyhow!("PAC activé mais PacResolver non initialisé"))?;
+                .ok_or_else(|| anyhow::anyhow!("PAC enabled but PacResolver not initialized"))?;
             let proxies = resolver.resolve(request_url).await?;
             let mut candidates: Vec<Option<String>> = Vec::new();
 
             for pac_entry in proxies {
                 if let Some(proxy_url) = map_pac_entry_to_proxy_url(&pac_entry) {
                     tracing::debug!(
-                        "PAC sélection pour URL {} -> entrée '{}' -> upstream {}",
+                        "PAC selection for URL {} -> entry '{}' -> upstream {}",
                         request_url,
                         pac_entry,
                         proxy_url
@@ -442,13 +442,13 @@ async fn build_upstream_proxy_candidates(
                     || pac_entry.trim().eq_ignore_ascii_case("direct://")
                 {
                     tracing::debug!(
-                        "PAC sélection pour URL {} -> entrée 'DIRECT'",
+                        "PAC selection for URL {} -> entry 'DIRECT'",
                         request_url
                     );
                     candidates.push(None);
                 } else {
                     tracing::debug!(
-                        "PAC entrée ignorée pour URL {}: '{}'",
+                        "PAC entry ignored for URL {}: '{}'",
                         request_url,
                         pac_entry
                     );
@@ -457,7 +457,7 @@ async fn build_upstream_proxy_candidates(
 
             if candidates.is_empty() {
                 tracing::debug!(
-                    "PAC ne retourne aucun proxy exploitable pour URL {} -> DIRECT",
+                    "PAC returns no usable proxy for URL {} -> DIRECT",
                     request_url
                 );
                 return Ok(vec![None]);
@@ -479,7 +479,7 @@ async fn build_upstream_proxy_candidates(
 
             let upstream = format!("{}://{}:{}", scheme, config.proxy_host, config.proxy_port);
             tracing::debug!(
-                "Proxy statique sélectionné pour URL {} -> {}",
+                "Static proxy selected for URL {} -> {}",
                 request_url,
                 upstream
             );
@@ -539,7 +539,7 @@ async fn establish_connect_tunnel(
     for (index, proxy_candidate) in proxy_candidates.into_iter().enumerate() {
         let candidate_label = proxy_candidate.clone().unwrap_or_else(|| "DIRECT".to_string());
         tracing::debug!(
-            "Tentative CONNECT {}/{} vers {} via {}",
+            "CONNECT attempt {}/{} to {} via {}",
             index + 1,
             total,
             target_host_port,
@@ -563,7 +563,7 @@ async fn establish_connect_tunnel(
                     connect_via_socks_upstream(config, "socks5", upstream, target_host_port).await
                 } else {
                     Err(anyhow::anyhow!(
-                        "CONNECT via upstream non supporté pour ce schéma: {}",
+                        "CONNECT via upstream not supported for this scheme: {}",
                         url
                     ))
                 }
@@ -574,7 +574,7 @@ async fn establish_connect_tunnel(
             Ok(stream) => return Ok(stream),
             Err(e) => {
                 tracing::warn!(
-                    "CONNECT échoué via {} (tentative {}/{}): {}",
+                    "CONNECT failed via {} (attempt {}/{}): {}",
                     candidate_label,
                     index + 1,
                     total,
@@ -585,7 +585,7 @@ async fn establish_connect_tunnel(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Aucune tentative CONNECT n'a abouti")))
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("No CONNECT attempt succeeded")))
 }
 
 async fn connect_via_socks_upstream(
@@ -626,7 +626,7 @@ async fn connect_via_socks_upstream(
 
             Ok(stream.into_inner())
         }
-        _ => anyhow::bail!("Schéma SOCKS non supporté: {}", socks_scheme),
+        _ => anyhow::bail!("Unsupported SOCKS scheme: {}", socks_scheme),
     }
 }
 
@@ -636,21 +636,21 @@ fn parse_host_port(value: &str) -> Result<(String, u16)> {
             let host = &rest[..end_bracket];
             let port_part = rest[end_bracket + 1..]
                 .strip_prefix(':')
-                .ok_or_else(|| anyhow::anyhow!("Port manquant dans {}", value))?;
+                .ok_or_else(|| anyhow::anyhow!("Missing port in {}", value))?;
             let port: u16 = port_part
                 .parse()
-                .map_err(|_| anyhow::anyhow!("Port invalide dans {}", value))?;
+                .map_err(|_| anyhow::anyhow!("Invalid port in {}", value))?;
             return Ok((host.to_string(), port));
         }
     }
 
     let (host, port_part) = value
         .rsplit_once(':')
-        .ok_or_else(|| anyhow::anyhow!("Format host:port invalide: {}", value))?;
+        .ok_or_else(|| anyhow::anyhow!("Invalid host:port format: {}", value))?;
 
     let port: u16 = port_part
         .parse()
-        .map_err(|_| anyhow::anyhow!("Port invalide dans {}", value))?;
+        .map_err(|_| anyhow::anyhow!("Invalid port in {}", value))?;
 
     Ok((host.to_string(), port))
 }
@@ -711,7 +711,7 @@ async fn connect_via_http_upstream(
     loop {
         let n = stream.read(&mut temp).await?;
         if n == 0 {
-            anyhow::bail!("Connexion fermée par le proxy upstream pendant CONNECT");
+            anyhow::bail!("Connection closed by upstream proxy during CONNECT");
         }
         response.extend_from_slice(&temp[..n]);
 
@@ -720,7 +720,7 @@ async fn connect_via_http_upstream(
         }
 
         if response.len() > 32 * 1024 {
-            anyhow::bail!("Réponse CONNECT upstream trop grande");
+            anyhow::bail!("CONNECT upstream response too large");
         }
     }
 
@@ -733,7 +733,7 @@ async fn connect_via_http_upstream(
     let status_line = head.lines().next().unwrap_or_default().to_string();
 
     if !status_line.contains(" 200 ") {
-        anyhow::bail!("CONNECT refusé par upstream: {}", status_line);
+        anyhow::bail!("CONNECT refused by upstream: {}", status_line);
     }
 
     Ok(stream)
@@ -749,7 +749,7 @@ fn build_proxy_authorization_header(
 
     if matches!(config.http_auth_protocol, HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS) {
         anyhow::bail!(
-            "CONNECT avec NTLM/Kerberos upstream n'est pas encore implémenté dans le tunnel brut"
+            "CONNECT with NTLM/Kerberos upstream is not yet implemented in the raw tunnel"
         );
     }
 
@@ -760,11 +760,11 @@ fn build_proxy_authorization_header(
         }
         #[cfg(not(windows))]
         {
-            anyhow::bail!("Windows current credentials demandé hors Windows")
+            anyhow::bail!("Windows current credentials requested on non-Windows system")
         }
     } else {
         if config.proxy_username.is_empty() {
-            anyhow::bail!("proxy_username manquant pour authentification proxy CONNECT")
+            anyhow::bail!("proxy_username missing for CONNECT proxy authentication")
         }
         (config.proxy_username.clone(), config.proxy_password.clone())
     };
@@ -773,7 +773,7 @@ fn build_proxy_authorization_header(
     Ok(Some(format!("Basic {}", token)))
 }
 
-// Extraire host:port de la ligne CONNECT
+// Extract host:port from CONNECT line
 fn extract_connect_host(request_line: &str) -> Option<String> {
     // Format: "CONNECT host:port HTTP/1.1"
     let parts: Vec<&str> = request_line.split_whitespace().collect();

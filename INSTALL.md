@@ -1,20 +1,20 @@
-# WinfoomRust - Guide de Compilation et d'Utilisation
+# WinfoomRust - Build and Usage Guide
 
-> **⚠️ Projet en cours de développement — version de test (beta)**
+> **⚠️ Project under active development — beta version**
 
-Version actuelle: **0.6.0**
+Current version: **0.6.0**
 
-**Ce projet est open source et développé avec assistance de l'IA.**
+**This project is open source and developed with AI assistance.**
 
-## Installation de Rust (si nécessaire)
+## Installing Rust (if needed)
 
 ### Windows
 
-1. **Télécharger rustup-init.exe** depuis https://rustup.rs/
-2. **Exécuter l'installeur** et suivre les instructions
-3. **Redémarrer le terminal** pour que les changements prennent effet
+1. **Download rustup-init.exe** from https://rustup.rs/
+2. **Run the installer** and follow the instructions
+3. **Restart the terminal** for the changes to take effect
 
-Ou via winget:
+Or via winget:
 ```powershell
 winget install Rustlang.Rustup
 ```
@@ -26,81 +26,81 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 ```
 
-## Vérifier l'installation
+## Verify the installation
 
 ```bash
 rustc --version
 cargo --version
 ```
 
-## Compilation
+## Building
 
-Toutes les dépendances sont des crates Rust gérées automatiquement par Cargo.
+All dependencies are Rust crates managed automatically by Cargo.
 
 ```bash
-# Naviguer vers le dossier
+# Navigate to the folder
 cd winfoom-rust
 
-# Compiler en mode debug (plus rapide à compiler, plus lent à exécuter)
+# Build in debug mode (faster to compile, slower to run)
 cargo build
 
-# Compiler en mode release (optimisé pour la performance)
+# Build in release mode (optimized for performance)
 cargo build --release
 ```
 
-Les exécutables seront dans:
-- Mode debug: `target/debug/winfoomrust` (ou `.exe` sur Windows)
-- Mode release: `target/release/winfoomrust` (ou `.exe` sur Windows)
+Executables will be in:
+- Debug mode: `target/debug/winfoomrust` (or `.exe` on Windows)
+- Release mode: `target/release/winfoomrust` (or `.exe` on Windows)
 
-Sur Windows, l'icône est automatiquement embarquée dans l'exécutable.
+On Windows, the icon is automatically embedded in the executable.
 
-## Exécution
+## Running
 
 ```bash
-# Directement avec cargo (recompile si nécessaire)
+# Directly with cargo (recompiles if needed)
 cargo run --release
 
-# Ou exécuter le binaire compilé
+# Or run the compiled binary
 ./target/release/winfoomrust      # Linux/macOS
 .\target\release\winfoomrust.exe  # Windows
 ```
 
 ## Configuration
 
-L'application créera automatiquement un fichier de configuration à:
+The application will automatically create a configuration file at:
 - **Windows:** `%APPDATA%\winfoom-rust\config.toml`
 - **Linux:** `~/.config/winfoom-rust/config.toml`
 - **macOS:** `~/Library/Application Support/winfoom-rust/config.toml`
 
-## Utilisation
+## Usage
 
-1. **Lancer l'application** - Une fenêtre graphique s'ouvrira
-2. **Configurer le proxy upstream:**
-   - Sélectionner le type de proxy (HTTP, SOCKS4, SOCKS5, PAC, ou DIRECT)
-   - Entrer l'hôte et le port du proxy
-   - Configurer l'authentification si nécessaire
-3. **Configurer le port local** (par défaut: 3129)
-4. **Démarrer le proxy** en cliquant sur "▶ Démarrer le proxy"
-5. **Configurer vos applications** pour utiliser `127.0.0.1:3129` comme proxy
-6. **Accéder aux logs** via le menu **Aide** → **Ouvrir le dossier des logs**
+1. **Launch the application** - A graphical window will open
+2. **Configure the upstream proxy:**
+   - Select the proxy type (HTTP, SOCKS4, SOCKS5, PAC, or DIRECT)
+   - Enter the proxy host and port
+   - Configure authentication if needed
+3. **Configure the local port** (default: 3129)
+4. **Start the proxy** by clicking "▶ Start proxy"
+5. **Configure your applications** to use `127.0.0.1:3129` as proxy
+6. **Access logs** via the **Help** menu → **Open logs folder**
 
-### Mode PAC
+### PAC Mode
 
-En mode `PAC`, l'application évalue directement le fichier PAC configuré grâce à un moteur JavaScript intégré (`boa_engine`):
-- **URL distante:** `http://proxy.company.com/proxy.pac` ou `https://...`
-- **Fichier local:** `C:\Users\...\proxy.pac` ou `file:///C:/Users/.../proxy.pac`
+In `PAC` mode, the application directly evaluates the configured PAC file using a built-in JavaScript engine (`boa_engine`):
+- **Remote URL:** `http://proxy.company.com/proxy.pac` or `https://...`
+- **Local file:** `C:\Users\...\proxy.pac` or `file:///C:/Users/.../proxy.pac`
 
-Le fichier PAC configuré dans l'application est directement utilisé, indépendamment des paramètres proxy du système. Toutes les fonctions PAC standard sont implémentées (`FindProxyForURL`, `shExpMatch`, `dnsDomainIs`, `isInNet`, `dnsResolve`, `myIpAddress`, etc.).
+The PAC file configured in the application is used directly, independently of system proxy settings. All standard PAC functions are implemented (`FindProxyForURL`, `shExpMatch`, `dnsDomainIs`, `isInNet`, `dnsResolve`, `myIpAddress`, etc.).
 
-### Zone de notification (Windows)
+### Notification Area (Windows)
 
-- Fermer avec `X` minimise l'application dans la zone de notification.
-- Clic gauche sur l'icône tray: restaure la fenêtre.
-- Clic droit: menu `Ouvrir` / `Quitter`.
+- Closing with `X` minimizes the application to the notification area.
+- Left click on the tray icon: restores the window.
+- Right click: `Open` / `Quit` menu.
 
-## Exemples de configuration
+## Configuration Examples
 
-### Proxy HTTP avec NTLM (Windows)
+### HTTP Proxy with NTLM (Windows)
 
 ```toml
 proxy_type = "HTTP"
@@ -110,9 +110,9 @@ local_port = 3129
 use_current_credentials = true
 ```
 
-> Le mode NTLM/Kerberos via credentials Windows courants (`use_current_credentials = true`) est pris en charge sur Windows.
+> NTLM/Kerberos mode via current Windows credentials (`use_current_credentials = true`) is supported on Windows.
 
-### Proxy HTTP avec authentification manuelle
+### HTTP Proxy with manual authentication
 
 ```toml
 proxy_type = "HTTP"
@@ -125,7 +125,7 @@ proxy_password = "password"
 http_auth_protocol = "NTLM"
 ```
 
-### Proxy SOCKS5
+### SOCKS5 Proxy
 
 ```toml
 proxy_type = "SOCKS5"
@@ -134,7 +134,7 @@ proxy_port = 1080
 local_port = 3129
 ```
 
-### Proxy PAC
+### PAC Proxy
 
 ```toml
 proxy_type = "PAC"
@@ -144,7 +144,7 @@ pac_cache_ttl_seconds = 300
 pac_stale_ttl_seconds = 900
 ```
 
-### Proxy PAC (fichier local)
+### PAC Proxy (local file)
 
 ```toml
 proxy_type = "PAC"
@@ -154,67 +154,67 @@ pac_cache_ttl_seconds = 300
 pac_stale_ttl_seconds = 900
 ```
 
-## Problèmes courants
+## Common Issues
 
 ### "cargo: command not found"
-- Rust n'est pas installé ou le PATH n'est pas configuré
-- Redémarrer le terminal après l'installation
-- Sur Windows, vérifier que `%USERPROFILE%\.cargo\bin` est dans le PATH
+- Rust is not installed or the PATH is not configured
+- Restart the terminal after installation
+- On Windows, check that `%USERPROFILE%\.cargo\bin` is in the PATH
 
-### Erreurs de compilation
-- Vérifier que vous avez la dernière version de Rust: `rustup update`
-- Nettoyer et recompiler: `cargo clean` puis `cargo build --release`
+### Compilation errors
+- Make sure you have the latest version of Rust: `rustup update`
+- Clean and rebuild: `cargo clean` then `cargo build --release`
 
-### Le proxy ne démarre pas
-- Vérifier que le port n'est pas déjà utilisé
-- Vérifier les permissions (les ports < 1024 nécessitent des privilèges admin)
-- Consulter les logs dans la console
+### The proxy won't start
+- Check that the port is not already in use
+- Check permissions (ports < 1024 require admin privileges)
+- Check the logs in the console
 
-### Le mode PAC ne fonctionne pas
-- Vérifier que l'URL ou le chemin du fichier PAC est correct
-- Vérifier que le fichier PAC est accessible (réseau ou disque)
-- Consulter les logs pour les erreurs d'évaluation JavaScript
-- Vérifier la syntaxe du fichier PAC (fonction `FindProxyForURL` attendue)
+### PAC mode is not working
+- Verify that the PAC file URL or path is correct
+- Verify that the PAC file is accessible (network or disk)
+- Check the logs for JavaScript evaluation errors
+- Verify the PAC file syntax (`FindProxyForURL` function expected)
 
-### Erreurs d'authentification
-- Vérifier les credentials
-- Sur Windows, essayer avec `use_current_credentials = true`
-- Vérifier que le protocole configuré correspond au mode attendu
-- En HTTP:
-   - `BASIC` + credentials manuels: supporté
-   - `NTLM` / `KERBEROS` + `use_current_credentials = true`: supporté (Windows)
-   - `NTLM` / `KERBEROS` + credentials manuels: non supporté
+### Authentication errors
+- Check the credentials
+- On Windows, try with `use_current_credentials = true`
+- Check that the configured protocol matches the expected mode
+- In HTTP:
+   - `BASIC` + manual credentials: supported
+   - `NTLM` / `KERBEROS` + `use_current_credentials = true`: supported (Windows)
+   - `NTLM` / `KERBEROS` + manual credentials: not supported
 
-## Support et contribution
+## Support and Contributing
 
-Pour toute question ou problème:
-- Consulter le README.md principal
-- Vérifier les logs de l'application
-- Ouvrir une issue sur GitHub
+For any questions or issues:
+- Refer to the main README.md
+- Check the application logs
+- Open an issue on GitHub
 
-Ce projet est en phase de test (beta). Les retours d'expérience et rapports de bugs sont particulièrement appréciés.
+This project is in beta testing. Experience feedback and bug reports are especially appreciated.
 
-## Note de développement
+## Development Note
 
-**Cette application a été développée avec assistance de l'IA.**
+**This application was developed with AI assistance.**
 
-## Performances
+## Performance
 
-Le mode release est **beaucoup plus rapide** que le mode debug. Toujours utiliser `--release` pour une utilisation normale:
+Release mode is **much faster** than debug mode. Always use `--release` for normal usage:
 ```bash
 cargo build --release
 cargo run --release
 ```
 
-## Mise à jour
+## Updating
 
-Pour mettre à jour les dépendances:
+To update dependencies:
 ```bash
 cargo update
 cargo build --release
 ```
 
-Pour mettre à jour Rust:
+To update Rust:
 ```bash
 rustup update
 ```
