@@ -7,6 +7,7 @@ use crate::pac::PacResolver;
 use anyhow::Result;
 use base64::Engine;
 use reqwest::Client;
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -23,6 +24,7 @@ pub struct ProxyServer {
     auth_handler: Arc<AuthHandler>,
     pac_resolver: Option<Arc<PacResolver>>,
     dns_negative_cache: Arc<StdMutex<HashMap<String, Instant>>>,
+    client_cache: Arc<Mutex<HashMap<String, Client>>>,
     listener: Option<TcpListener>,
     server_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -50,6 +52,7 @@ impl ProxyServer {
             auth_handler: Arc::new(AuthHandler::new(config)),
             pac_resolver,
             dns_negative_cache: Arc::new(StdMutex::new(HashMap::new())),
+            client_cache: Arc::new(Mutex::new(HashMap::new())),
             listener: None,
             server_handle: None,
         }
@@ -66,6 +69,16 @@ impl ProxyServer {
         let addr = SocketAddr::from(([127, 0, 0, 1], config.local_port));
         drop(config);
 
+        if matches!(startup_config.proxy_type, ProxyType::PAC) {
+            self.pac_resolver = Some(PacResolver::reload_shared(
+                &startup_config.proxy_pac_file_location,
+                startup_config.pac_cache_ttl_seconds,
+                startup_config.pac_stale_ttl_seconds,
+            )?);
+        } else {
+            self.pac_resolver = None;
+        }
+
         tracing::info!("Starting proxy server on {}", addr);
 
         let listener = TcpListener::bind(addr).await?;
@@ -74,6 +87,7 @@ impl ProxyServer {
         let auth_handler = Arc::clone(&self.auth_handler);
         let pac_resolver = self.pac_resolver.clone();
         let dns_negative_cache = Arc::clone(&self.dns_negative_cache);
+        let client_cache = Arc::clone(&self.client_cache);
 
         if let Some(resolver) = self.pac_resolver.clone() {
             if matches!(startup_config.proxy_type, ProxyType::PAC) {
@@ -100,6 +114,7 @@ impl ProxyServer {
                         let auth_handler = Arc::clone(&auth_handler);
                         let pac_resolver = pac_resolver.clone();
                         let dns_negative_cache = Arc::clone(&dns_negative_cache);
+                        let client_cache = Arc::clone(&client_cache);
                         
                         tokio::spawn(async move {
                             let mut stream = stream;
@@ -259,6 +274,7 @@ impl ProxyServer {
                                             );
 
                                             let client = match create_forward_client_for_proxy(
+                                                &client_cache,
                                                 &request_config,
                                                 auth_handler.as_ref(),
                                                 proxy_candidate.as_deref(),
@@ -315,8 +331,19 @@ impl ProxyServer {
                                             let _ = stream.write_all(response_str.as_bytes()).await;
                                             
                                             // Send body
-                                            if let Ok(body) = resp.bytes().await {
-                                                let _ = stream.write_all(&body).await;
+                                            let mut body_stream = resp.bytes_stream();
+                                            while let Some(chunk) = body_stream.next().await {
+                                                match chunk {
+                                                    Ok(bytes) => {
+                                                        if stream.write_all(&bytes).await.is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::debug!("HTTP body stream error: {}", e);
+                                                        break;
+                                                    }
+                                                }
                                             }
                                             
                                             let _ = stream.flush().await;
@@ -380,6 +407,11 @@ impl ProxyServer {
         
         // Wait a bit for the port to be released
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        if matches!(self.config.lock().await.proxy_type, ProxyType::PAC) {
+            PacResolver::clear_shared();
+            self.pac_resolver = None;
+        }
         
         tracing::info!("Proxy server stopped");
         Ok(())
@@ -388,21 +420,36 @@ impl ProxyServer {
 }
 
 async fn create_forward_client_for_proxy(
+    client_cache: &Mutex<HashMap<String, Client>>,
     config: &Config,
     auth_handler: &AuthHandler,
     proxy_url: Option<&str>,
 ) -> Result<Client> {
-    if let Some(proxy_url) = proxy_url {
-        tracing::debug!("Using upstream proxy: {}", proxy_url);
-        return auth_handler.create_authenticated_client(&proxy_url).await;
+    let cache_key = match proxy_url {
+        Some(url) => format!("proxy:{}", url),
+        None => "direct".to_string(),
+    };
+
+    if let Some(client) = {
+        let guard = client_cache.lock().await;
+        guard.get(&cache_key).cloned()
+    } {
+        return Ok(client);
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(config.socket_timeout))
-        .connect_timeout(std::time::Duration::from_secs(config.connect_timeout))
-        .build()?;
+    let client = if let Some(proxy_url) = proxy_url {
+        tracing::debug!("Using upstream proxy: {}", proxy_url);
+        auth_handler.create_authenticated_client(&proxy_url).await?
+    } else {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(config.socket_timeout))
+            .connect_timeout(std::time::Duration::from_secs(config.connect_timeout))
+            .build()?
+    };
 
-    Ok(client)
+    let mut guard = client_cache.lock().await;
+    let entry = guard.entry(cache_key).or_insert_with(|| client.clone());
+    Ok(entry.clone())
 }
 
 async fn build_upstream_proxy_candidates(

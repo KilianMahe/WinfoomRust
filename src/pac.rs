@@ -3,9 +3,18 @@ use anyhow::Result;
 use boa_engine::{Context, JsArgs, JsResult, JsValue, Source, js_string};
 use boa_engine::NativeFunction;
 use once_cell::sync::Lazy;
+use std::env;
+#[cfg(not(windows))]
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::{Arc, Mutex};
+#[cfg(windows)]
+use std::sync::mpsc;
+#[cfg(windows)]
+use std::thread;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as TokioMutex, Notify};
 
@@ -44,9 +53,118 @@ struct SharedResolverState {
     resolver: Arc<PacResolver>,
 }
 
+struct PacVm {
+    script_hash: u64,
+    context: Context,
+}
+
+#[cfg(not(windows))]
+thread_local! {
+    static PAC_VM: RefCell<Option<PacVm>> = const { RefCell::new(None) };
+}
+
 static SHARED_PAC_RESOLVER: Lazy<Mutex<Option<SharedResolverState>>> =
     Lazy::new(|| Mutex::new(None));
 
+static USE_PAC_CONTEXT_CACHE: Lazy<bool> = Lazy::new(|| {
+    let flag = env::var("WINFOOM_PAC_CONTEXT_CACHE")
+        .unwrap_or_else(|_| "".to_string())
+        .to_ascii_lowercase();
+
+    if flag.is_empty() {
+        return true;
+    }
+
+    !matches!(flag.as_str(), "0" | "false" | "no" | "off")
+});
+
+#[cfg(windows)]
+struct PacEvalRequest {
+    pac_script: String,
+    script_hash: u64,
+    url: String,
+    host: String,
+    respond_to: mpsc::Sender<Result<String>>,
+}
+
+#[cfg(windows)]
+struct PacWorker {
+    tx: mpsc::Sender<PacEvalRequest>,
+}
+
+#[cfg(windows)]
+impl PacWorker {
+    fn new() -> Self {
+        let (tx, rx) = mpsc::channel::<PacEvalRequest>();
+        thread::spawn(move || pac_worker_loop(rx));
+        Self { tx }
+    }
+
+    fn eval(&self, pac_script: &str, url: &str, host: &str) -> Result<String> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let script_hash = hash_pac_script(pac_script);
+        let request = PacEvalRequest {
+            pac_script: pac_script.to_string(),
+            script_hash,
+            url: url.to_string(),
+            host: host.to_string(),
+            respond_to: reply_tx,
+        };
+
+        self.tx
+            .send(request)
+            .map_err(|_| anyhow::anyhow!("PAC worker thread is not available"))?;
+
+        reply_rx
+            .recv()
+            .map_err(|_| anyhow::anyhow!("PAC worker reply failed"))?
+    }
+}
+
+#[cfg(windows)]
+static PAC_WORKER: Lazy<PacWorker> = Lazy::new(PacWorker::new);
+
+#[cfg(windows)]
+fn pac_worker_loop(rx: mpsc::Receiver<PacEvalRequest>) {
+    let mut vm: Option<PacVm> = None;
+
+    for request in rx {
+        let result = (|| -> Result<String> {
+            let needs_init = match vm.as_ref() {
+                Some(current) => current.script_hash != request.script_hash,
+                None => true,
+            };
+
+            if needs_init {
+                let mut context = Context::default();
+                register_pac_helpers(&mut context)?;
+                context
+                    .eval(Source::from_bytes(request.pac_script.as_bytes()))
+                    .map_err(|e| anyhow::anyhow!("PAC script parsing error: {}", e))?;
+
+                vm = Some(PacVm {
+                    script_hash: request.script_hash,
+                    context,
+                });
+            }
+
+            let vm_ref = vm.as_mut().expect("PAC VM not initialized");
+            let call_script = build_find_proxy_call(&request.url, &request.host);
+            let result = vm_ref
+                .context
+                .eval(Source::from_bytes(call_script.as_bytes()))
+                .map_err(|e| anyhow::anyhow!("FindProxyForURL execution error: {}", e))?;
+
+            let result_str = result
+                .to_string(&mut vm_ref.context)
+                .map_err(|e| anyhow::anyhow!("PAC result to string conversion error: {}", e))?;
+
+            Ok(result_str.to_std_string_escaped())
+        })();
+
+        let _ = request.respond_to.send(result);
+    }
+}
 impl PacResolver {
     pub fn shared(pac_url: &str, cache_ttl_seconds: u64, stale_ttl_seconds: u64) -> Result<Arc<Self>> {
         let mut guard = SHARED_PAC_RESOLVER.lock().map_err(|e| {
@@ -71,6 +189,28 @@ impl PacResolver {
         });
 
         Ok(resolver)
+    }
+
+    pub fn reload_shared(pac_url: &str, cache_ttl_seconds: u64, stale_ttl_seconds: u64) -> Result<Arc<Self>> {
+        let mut guard = SHARED_PAC_RESOLVER.lock().map_err(|e| {
+            anyhow::anyhow!("Unable to acquire shared PAC resolver lock: {}", e)
+        })?;
+
+        let resolver = Arc::new(Self::new(pac_url, cache_ttl_seconds, stale_ttl_seconds)?);
+        *guard = Some(SharedResolverState {
+            pac_url: pac_url.to_string(),
+            cache_ttl_seconds,
+            stale_ttl_seconds,
+            resolver: Arc::clone(&resolver),
+        });
+
+        Ok(resolver)
+    }
+
+    pub fn clear_shared() {
+        if let Ok(mut guard) = SHARED_PAC_RESOLVER.lock() {
+            *guard = None;
+        }
     }
 
     /// Creates a new PacResolver instance with built-in JS evaluator
@@ -279,6 +419,62 @@ fn load_pac_script(pac_url: &str) -> Result<String> {
 // ─── PAC JavaScript evaluation ──────────────────────────────────────────────────────────
 
 fn evaluate_pac_script(pac_script: &str, url: &str, host: &str) -> Result<String> {
+    if !*USE_PAC_CONTEXT_CACHE {
+        return evaluate_pac_script_uncached(pac_script, url, host);
+    }
+
+    #[cfg(windows)]
+    {
+        return PAC_WORKER.eval(pac_script, url, host);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let script_hash = hash_pac_script(pac_script);
+
+        return PAC_VM.with(|cell| -> Result<String> {
+            let mut guard = cell.borrow_mut();
+            let needs_init = match guard.as_ref() {
+                Some(vm) => vm.script_hash != script_hash,
+                None => true,
+            };
+
+            if needs_init {
+                let mut context = Context::default();
+
+                // Register PAC helper functions
+                register_pac_helpers(&mut context)?;
+
+                // Load the PAC script once per thread
+                context
+                    .eval(Source::from_bytes(pac_script.as_bytes()))
+                    .map_err(|e| anyhow::anyhow!("PAC script parsing error: {}", e))?;
+
+                *guard = Some(PacVm {
+                    script_hash,
+                    context,
+                });
+            }
+
+            let vm = guard.as_mut().expect("PAC VM not initialized");
+
+            // Call FindProxyForURL(url, host)
+            let call_script = build_find_proxy_call(url, host);
+            let result = vm
+                .context
+                .eval(Source::from_bytes(call_script.as_bytes()))
+                .map_err(|e| anyhow::anyhow!("FindProxyForURL execution error: {}", e))?;
+
+            let result_str = result
+                .to_string(&mut vm.context)
+                .map_err(|e| anyhow::anyhow!("PAC result to string conversion error: {}", e))?;
+
+            Ok(result_str.to_std_string_escaped())
+        });
+    }
+}
+
+fn evaluate_pac_script_uncached(pac_script: &str, url: &str, host: &str) -> Result<String> {
     let mut context = Context::default();
 
     // Register PAC helper functions
@@ -290,11 +486,7 @@ fn evaluate_pac_script(pac_script: &str, url: &str, host: &str) -> Result<String
         .map_err(|e| anyhow::anyhow!("PAC script parsing error: {}", e))?;
 
     // Call FindProxyForURL(url, host)
-    let call_script = format!(
-        "FindProxyForURL(\"{}\", \"{}\")",
-        url.replace('\\', "\\\\").replace('"', "\\\""),
-        host.replace('\\', "\\\\").replace('"', "\\\"")
-    );
+    let call_script = build_find_proxy_call(url, host);
 
     let result = context
         .eval(Source::from_bytes(call_script.as_bytes()))
@@ -305,6 +497,20 @@ fn evaluate_pac_script(pac_script: &str, url: &str, host: &str) -> Result<String
         .map_err(|e| anyhow::anyhow!("PAC result to string conversion error: {}", e))?;
 
     Ok(result_str.to_std_string_escaped())
+}
+
+fn build_find_proxy_call(url: &str, host: &str) -> String {
+    format!(
+        "FindProxyForURL(\"{}\", \"{}\")",
+        url.replace('\\', "\\\\").replace('"', "\\\""),
+        host.replace('\\', "\\\\").replace('"', "\\\"")
+    )
+}
+
+fn hash_pac_script(pac_script: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    pac_script.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn register_pac_helpers(context: &mut Context) -> Result<()> {

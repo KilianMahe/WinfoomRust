@@ -25,7 +25,7 @@ tower = { version = "0.4", features = ["util"] }
 tower-service = "0.3"
 
 # Client HTTP
-reqwest = { version = "0.12", features = ["json", "socks", "native-tls-alpn", "blocking"] }
+reqwest = { version = "0.12", features = ["json", "socks", "native-tls-alpn", "blocking", "stream"] }
 tokio-socks = "0.5"
 
 # Évaluation PAC (moteur JavaScript intégré)
