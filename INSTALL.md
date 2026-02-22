@@ -2,7 +2,7 @@
 
 > **⚠️ Project under active development — beta version**
 
-Current version: **0.7.0**
+Current version: **0.8.0**
 
 **This project is open source and developed with AI assistance.**
 
@@ -70,7 +70,7 @@ cargo run --release
 The application will automatically create a configuration file at:
 - **Windows:** `%APPDATA%\winfoom-rust\config.toml`
 - **Linux:** `~/.config/winfoom-rust/config.toml`
-- **macOS:** `~/Library/Application Support/winfoom-rust/config.toml`
+- **macOS:** `~/.config/winfoom-rust/config.toml`
 
 ## Usage
 
@@ -83,6 +83,7 @@ The application will automatically create a configuration file at:
 4. **Start the proxy** by clicking "▶ Start proxy"
 5. **Configure your applications** to use `127.0.0.1:3129` as proxy
 6. **Access logs** via the **Help** menu → **Open logs folder**
+7. **Open config folder** via the **Help** menu → **Open config folder**
 
 ### PAC Mode
 

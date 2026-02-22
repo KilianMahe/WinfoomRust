@@ -949,7 +949,7 @@ impl eframe::App for WinfoomrustApp {
                         ui.add_space(10.0);
                         ui.heading("WinfoomRust");
                         ui.add_space(5.0);
-                        ui.label("Version 0.7.0");
+                        ui.label("Version 0.8.0");
                         ui.add_space(10.0);
                         ui.label("Proxy Facade for Windows");
                         ui.add_space(5.0);

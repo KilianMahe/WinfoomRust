@@ -4,7 +4,7 @@
 
 HTTP(S) facade proxy in Rust for working with HTTP, SOCKS, and PAC proxies, with a desktop GUI.
 
-Current version: **0.7.0**
+Current version: **0.8.0**
 
 **This project is open source and developed with AI assistance.**
 
@@ -175,6 +175,7 @@ log_level = "info"
 ## Logs
 
 - Quick access: **Help** menu → **Open logs folder**
+- Config location: **Help** menu → **Open config folder**
 - Rotation: daily
 - Default retention: 14 files
 - Levels: `trace`, `debug`, `info`, `warn`, `error`
