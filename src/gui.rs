@@ -278,16 +278,39 @@ impl WinfoomrustApp {
         Ok(())
     }
 
-    fn restart_application() -> Result<(), String> {
-        let exe_path = std::env::current_exe()
-            .map_err(|e| format!("Unable to determine current executable: {}", e))?;
+    fn open_config_directory() -> Result<(), String> {
+        let config_dir = Config::config_directory()
+            .map_err(|e| format!("Unable to determine config folder: {}", e))?;
+        std::fs::create_dir_all(&config_dir)
+            .map_err(|e| format!("Unable to create config folder: {}", e))?;
 
-        Command::new(exe_path)
-            .spawn()
-            .map_err(|e| format!("Unable to restart the application: {}", e))?;
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("explorer")
+                .arg(&config_dir)
+                .spawn()
+                .map_err(|e| format!("Unable to open config folder: {}", e))?;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open")
+                .arg(&config_dir)
+                .spawn()
+                .map_err(|e| format!("Unable to open config folder: {}", e))?;
+        }
+
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            Command::new("xdg-open")
+                .arg(&config_dir)
+                .spawn()
+                .map_err(|e| format!("Unable to open config folder: {}", e))?;
+        }
 
         Ok(())
     }
+
 }
 
 impl eframe::App for WinfoomrustApp {
@@ -410,6 +433,19 @@ impl eframe::App for WinfoomrustApp {
                         match Self::open_logs_directory() {
                             Ok(_) => {
                                 self.status_message = "Opening logs folder...".to_string();
+                            }
+                            Err(e) => {
+                                self.status_message = format!("Error: {}", e);
+                                tracing::error!("{}", e);
+                            }
+                        }
+                        ui.close_menu();
+                    }
+
+                    if ui.button("Open config folder").clicked() {
+                        match Self::open_config_directory() {
+                            Ok(_) => {
+                                self.status_message = "Opening config folder...".to_string();
                             }
                             Err(e) => {
                                 self.status_message = format!("Error: {}", e);
@@ -893,22 +929,6 @@ impl eframe::App for WinfoomrustApp {
                             }
                         }
 
-                        if ui.button("Restart application").clicked() {
-                            if let Err(e) = self.config.save() {
-                                self.status_message = format!("Config save error: {}", e);
-                            } else {
-                                match Self::restart_application() {
-                                    Ok(_) => {
-                                        self.allow_exit = true;
-                                        self.status_message = "Restarting the application...".to_string();
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                    }
-                                    Err(e) => {
-                                        self.status_message = e;
-                                    }
-                                }
-                            }
-                        }
                     });
                 });
             if !open {

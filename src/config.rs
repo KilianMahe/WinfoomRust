@@ -112,6 +112,13 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn config_directory() -> Result<PathBuf> {
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| anyhow::anyhow!("Unable to find configuration directory"))?;
+
+        Ok(config_dir.join(CONFIG_DIR_NAME))
+    }
+
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path()?;
         
