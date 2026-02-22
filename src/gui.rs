@@ -59,13 +59,16 @@ impl WinfoomrustApp {
         let config = self.config.clone();
         let proxy_server = Arc::clone(&self.proxy_server);
         let error_msg = Arc::clone(&self.error_message);
-        let unsupported_ntlm_sspi =
-            !self.config.use_current_credentials
-                && (!self.config.proxy_username.is_empty() || !self.config.proxy_password.is_empty())
-                && matches!(
-                    self.config.http_auth_protocol,
-                    HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
-                );
+        let unsupported_ntlm_sspi = self.config.http_auth_enabled
+            && !self.config.use_current_credentials
+            && (!self.config.proxy_username.is_empty() || !self.config.proxy_password.is_empty())
+            && matches!(
+                self.config.http_auth_protocol,
+                HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+            );
+        let unsupported_current_basic = self.config.http_auth_enabled
+            && self.config.use_current_credentials
+            && matches!(self.config.http_auth_protocol, HttpAuthProtocol::BASIC);
         
         self.runtime.spawn(async move {
             let mut server = ProxyServer::new(config.clone());
@@ -98,14 +101,12 @@ impl WinfoomrustApp {
         });
         
         self.is_running = true;
-        if unsupported_ntlm_sspi {
+        if unsupported_ntlm_sspi || unsupported_current_basic {
             self.status_message = format!(
-                "Proxy started on port {} — NTLM/SSPI not currently supported",
+                "Proxy started on port {} — auth configuration not supported",
                 self.config.local_port
             );
-            tracing::warn!(
-                "NTLM/SSPI mode detected: full handshake not implemented"
-            );
+            tracing::warn!("Unsupported auth mode detected");
         } else {
             self.status_message = format!("Proxy started on port {}", self.config.local_port);
         }
@@ -670,54 +671,98 @@ impl eframe::App for WinfoomrustApp {
                                 ui.group(|ui| {
                                     ui.label("Authentication:");
                                     
-                                    #[cfg(windows)]
-                                    {
-                                        ui.checkbox(
-                                            &mut self.config.use_current_credentials,
-                                            "Use current Windows credentials"
-                                        );
+                                    #[derive(Clone, Copy, PartialEq, Eq)]
+                                    enum AuthChoice {
+                                        WindowsNtlm,
+                                        WindowsKerberos,
+                                        Basic,
                                     }
 
-                                    if !self.config.use_current_credentials {
-                                        ui.add_space(5.0);
-                                        
-                                        ui.horizontal(|ui| {
-                                            ui.label("Username:");
-                                            ui.text_edit_singleline(&mut self.config.proxy_username);
-                                        });
-                                        
-                                        ui.horizontal(|ui| {
-                                            ui.label("Password:");
-                                            if self.show_password {
-                                                ui.text_edit_singleline(&mut self.config.proxy_password);
+                                    if ui.checkbox(&mut self.config.http_auth_enabled, "Enable authentication").changed() {
+                                        if !self.config.http_auth_enabled {
+                                            self.config.use_current_credentials = false;
+                                            self.config.proxy_username.clear();
+                                            self.config.proxy_password.clear();
+                                        } else {
+                                            if cfg!(windows) {
+                                                self.config.use_current_credentials = true;
+                                                self.config.http_auth_protocol = HttpAuthProtocol::NTLM;
                                             } else {
-                                                ui.add(egui::TextEdit::singleline(&mut self.config.proxy_password)
-                                                    .password(true));
+                                                self.config.use_current_credentials = false;
+                                                self.config.http_auth_protocol = HttpAuthProtocol::BASIC;
                                             }
-                                            if ui.button(if self.show_password { "🙈" } else { "👁" }).clicked() {
-                                                self.show_password = !self.show_password;
+                                        }
+                                    }
+
+                                    if self.config.http_auth_enabled {
+                                        ui.add_space(5.0);
+
+                                        let mut selected = if self.config.use_current_credentials {
+                                            match self.config.http_auth_protocol {
+                                                HttpAuthProtocol::KERBEROS => AuthChoice::WindowsKerberos,
+                                                _ => AuthChoice::WindowsNtlm,
                                             }
+                                        } else {
+                                            AuthChoice::Basic
+                                        };
+
+                                        ui.horizontal(|ui| {
+                                            ui.label("Mode:");
+                                            #[cfg(windows)]
+                                            {
+                                                ui.selectable_value(&mut selected, AuthChoice::WindowsNtlm, "Windows (NTLM)");
+                                                ui.selectable_value(&mut selected, AuthChoice::WindowsKerberos, "Windows (Kerberos)");
+                                            }
+                                            ui.selectable_value(&mut selected, AuthChoice::Basic, "BASIC");
                                         });
 
-                                        ui.add_space(5.0);
-                                        ui.horizontal(|ui| {
-                                            ui.label("Protocol:");
-                                            ui.selectable_value(
-                                                &mut self.config.http_auth_protocol,
-                                                HttpAuthProtocol::NTLM,
-                                                "NTLM"
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.config.http_auth_protocol,
-                                                HttpAuthProtocol::BASIC,
-                                                "BASIC"
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.config.http_auth_protocol,
-                                                HttpAuthProtocol::KERBEROS,
-                                                "KERBEROS"
-                                            );
-                                        });
+                                        match selected {
+                                            AuthChoice::WindowsNtlm => {
+                                                self.config.http_auth_enabled = true;
+                                                self.config.use_current_credentials = true;
+                                                self.config.http_auth_protocol = HttpAuthProtocol::NTLM;
+                                            }
+                                            AuthChoice::WindowsKerberos => {
+                                                self.config.http_auth_enabled = true;
+                                                self.config.use_current_credentials = true;
+                                                self.config.http_auth_protocol = HttpAuthProtocol::KERBEROS;
+                                            }
+                                            AuthChoice::Basic => {
+                                                self.config.http_auth_enabled = true;
+                                                self.config.use_current_credentials = false;
+                                                self.config.http_auth_protocol = HttpAuthProtocol::BASIC;
+                                            }
+                                        }
+
+                                        if !self.config.use_current_credentials {
+                                            ui.add_space(5.0);
+
+                                            ui.horizontal(|ui| {
+                                                ui.label("Username:");
+                                                ui.text_edit_singleline(&mut self.config.proxy_username);
+                                            });
+
+                                            ui.horizontal(|ui| {
+                                                ui.label("Password:");
+                                                if self.show_password {
+                                                    ui.text_edit_singleline(&mut self.config.proxy_password);
+                                                } else {
+                                                    ui.add(egui::TextEdit::singleline(&mut self.config.proxy_password)
+                                                        .password(true));
+                                                }
+                                                if ui.button(if self.show_password { "🙈" } else { "👁" }).clicked() {
+                                                    self.show_password = !self.show_password;
+                                                }
+                                            });
+
+                                            if matches!(self.config.http_auth_protocol, HttpAuthProtocol::BASIC) {
+                                                ui.add_space(5.0);
+                                                ui.checkbox(
+                                                    &mut self.config.allow_insecure_basic,
+                                                    "Allow BASIC over unencrypted proxy (unsafe)",
+                                                );
+                                            }
+                                        }
                                     }
                                 });
                             }

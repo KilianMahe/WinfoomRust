@@ -46,10 +46,12 @@ pub struct Config {
     pub local_port: u16,
     
     // Authentification
+    pub http_auth_enabled: bool,
     pub use_current_credentials: bool,
     pub proxy_username: String,
     pub proxy_password: String,
     pub http_auth_protocol: HttpAuthProtocol,
+    pub allow_insecure_basic: bool,
     
     // Configuration PAC
     pub proxy_pac_file_location: String,
@@ -86,10 +88,12 @@ impl Default for Config {
             proxy_host: String::new(),
             proxy_port: 80,
             local_port: 3129,
+            http_auth_enabled: false,
             use_current_credentials: cfg!(windows),
             proxy_username: String::new(),
             proxy_password: String::new(),
             http_auth_protocol: HttpAuthProtocol::NTLM,
+            allow_insecure_basic: false,
             proxy_pac_file_location: String::new(),
             pac_http_auth_protocol: None,
             proxy_test_url: "https://example.com".to_string(),
@@ -117,7 +121,8 @@ impl Config {
         }
 
         let content = std::fs::read_to_string(&config_path)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
+        config.normalize_auth_settings();
         
         tracing::info!("Configuration loaded from {:?}", config_path);
         Ok(config)
@@ -142,6 +147,18 @@ impl Config {
             .ok_or_else(|| anyhow::anyhow!("Unable to find configuration directory"))?;
         
         Ok(config_dir.join(CONFIG_DIR_NAME).join(CONFIG_FILE_NAME))
+    }
+
+    fn normalize_auth_settings(&mut self) {
+        if !self.http_auth_enabled {
+            self.http_auth_enabled = self.use_current_credentials
+                || !self.proxy_username.is_empty()
+                || !self.proxy_password.is_empty();
+        }
+
+        if !self.http_auth_enabled {
+            self.use_current_credentials = false;
+        }
     }
 }
 

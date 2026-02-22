@@ -788,13 +788,47 @@ fn build_proxy_authorization_header(
     config: &Config,
     auth_handler: &AuthHandler,
 ) -> Result<Option<String>> {
-    if config.proxy_username.is_empty() && config.proxy_password.is_empty() && !config.use_current_credentials {
+    if !config.http_auth_enabled {
+        return Ok(None);
+    }
+
+    if config.use_current_credentials
+        && matches!(config.http_auth_protocol, HttpAuthProtocol::BASIC)
+    {
+        anyhow::bail!(
+            "Current credentials with BASIC is not supported for CONNECT"
+        );
+    }
+
+    if !config.use_current_credentials
+        && matches!(
+            config.http_auth_protocol,
+            HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+        )
+    {
+        anyhow::bail!(
+            "CONNECT with manual NTLM/Kerberos is not supported"
+        );
+    }
+
+    if config.proxy_username.is_empty()
+        && config.proxy_password.is_empty()
+        && !config.use_current_credentials
+    {
         return Ok(None);
     }
 
     if matches!(config.http_auth_protocol, HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS) {
         anyhow::bail!(
             "CONNECT with NTLM/Kerberos upstream is not yet implemented in the raw tunnel"
+        );
+    }
+
+    if matches!(config.http_auth_protocol, HttpAuthProtocol::BASIC)
+        && !config.allow_insecure_basic
+    {
+        anyhow::bail!(
+            "BASIC auth for CONNECT is blocked unless allow_insecure_basic=true"
         );
     }
 

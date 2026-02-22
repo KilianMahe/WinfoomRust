@@ -154,6 +154,7 @@ use_current_credentials = true
 proxy_username = ""
 proxy_password = ""
 http_auth_protocol = "NTLM"
+allow_insecure_basic = false
 
 proxy_pac_file_location = ""
 pac_cache_ttl_seconds = 300
@@ -202,6 +203,7 @@ RUST_LOG=debug cargo run --release
 
 - Check the protocol (`BASIC`, `NTLM`, `KERBEROS`)
 - Check the credentials mode (`use_current_credentials`)
+- `BASIC` is blocked over unencrypted proxies unless `allow_insecure_basic = true`
 - Reminder: manual NTLM/Kerberos is not supported
 
 ### Compilation errors

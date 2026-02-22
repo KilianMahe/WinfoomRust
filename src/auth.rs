@@ -28,6 +28,7 @@ impl AuthHandler {
         tracing::debug!("Creating client with proxy: {}", proxy_url);
         
         let mut client_builder = Client::builder();
+        self.validate_auth_config(Some(proxy_url))?;
         let auth_mode = self.auth_mode();
 
         tracing::debug!("Selected authentication mode: {:?}", auth_mode);
@@ -49,18 +50,9 @@ impl AuthHandler {
                     if self.requires_sspi_handshake() {
                         p
                     } else {
-                        #[cfg(windows)]
-                        {
-                            let (username, password) = self.get_windows_credentials()?;
-                            p.basic_auth(&username, &password)
-                        }
-
-                        #[cfg(not(windows))]
-                        {
-                            anyhow::bail!(
-                        "WindowsCurrentCredentials mode requested on a non-Windows system"
-                            );
-                        }
+                        anyhow::bail!(
+                            "Windows current credentials require NTLM/Kerberos with SSPI"
+                        );
                     }
                 }
                 ProxyAuthMode::UnsupportedNtlmSspi => {
@@ -118,7 +110,8 @@ impl AuthHandler {
     }
 
     pub fn requires_sspi_handshake(&self) -> bool {
-        cfg!(windows)
+        self.config.http_auth_enabled
+            && cfg!(windows)
             && matches!(self.config.proxy_type, ProxyType::HTTP)
             && self.config.use_current_credentials
             && matches!(
@@ -134,12 +127,9 @@ impl AuthHandler {
         url: &str,
         proxy_auth_header: Option<&str>,
     ) -> Result<Response> {
-        let mut request = match method {
-            "GET" => client.get(url),
-            "HEAD" => client.head(url),
-            "POST" => client.post(url),
-            _ => anyhow::bail!("Unsupported HTTP method: {}", method),
-        };
+        let method = reqwest::Method::from_bytes(method.as_bytes())
+            .map_err(|_| anyhow::anyhow!("Unsupported HTTP method: {}", method))?;
+        let mut request = client.request(method, url);
 
         if let Some(value) = proxy_auth_header {
             request = request.header(PROXY_AUTHORIZATION, value);
@@ -168,7 +158,16 @@ impl AuthHandler {
             }
 
             let challenge = extract_proxy_auth_challenge(response.headers(), sspi.header_scheme());
+            if challenge.is_none() {
+                anyhow::bail!(
+                    "Proxy did not return a {} challenge (Proxy-Authenticate)",
+                    sspi.header_scheme()
+                );
+            }
             let output_token = sspi.next_token(challenge.as_deref())?;
+            if output_token.is_empty() {
+                anyhow::bail!("SSPI produced an empty token during handshake");
+            }
             proxy_auth_header = Some(format!(
                 "{} {}",
                 sspi.header_scheme(),
@@ -182,6 +181,10 @@ impl AuthHandler {
     }
 
     pub fn auth_mode(&self) -> ProxyAuthMode {
+        if !self.config.http_auth_enabled {
+            return ProxyAuthMode::None;
+        }
+
         if self.config.use_current_credentials
             && matches!(
                 self.config.http_auth_protocol,
@@ -211,6 +214,55 @@ impl AuthHandler {
         } else {
             ProxyAuthMode::None
         }
+    }
+
+    fn validate_auth_config(&self, proxy_url: Option<&str>) -> Result<()> {
+        if !self.config.http_auth_enabled {
+            return Ok(());
+        }
+
+        if self.config.use_current_credentials
+            && matches!(self.config.http_auth_protocol, HttpAuthProtocol::BASIC)
+        {
+            anyhow::bail!(
+                "Current credentials with BASIC is not supported. Use NTLM/Kerberos or manual BASIC credentials."
+            );
+        }
+
+        if !self.config.use_current_credentials
+            && matches!(
+                self.config.http_auth_protocol,
+                HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+            )
+        {
+            anyhow::bail!(
+                "Manual NTLM/Kerberos credentials are not supported. Use Windows current credentials."
+            );
+        }
+
+        if matches!(self.config.http_auth_protocol, HttpAuthProtocol::BASIC) {
+            if self.config.proxy_username.trim().is_empty() {
+                anyhow::bail!("proxy_username is required for BASIC authentication");
+            }
+
+            if self.config.proxy_password.is_empty() {
+                anyhow::bail!("proxy_password is required for BASIC authentication");
+            }
+
+            if !self.config.allow_insecure_basic {
+                match proxy_url {
+                    Some(url) if url.to_ascii_lowercase().starts_with("https://") => {}
+                    Some(_) => anyhow::bail!(
+                        "BASIC auth over an unencrypted proxy is blocked. Use an https proxy URL or set allow_insecure_basic=true."
+                    ),
+                    None => anyhow::bail!(
+                        "BASIC auth without a secure proxy URL is blocked. Set allow_insecure_basic=true to proceed."
+                    ),
+                }
+            }
+        }
+
+        Ok(())
     }
 
     #[cfg(windows)]
