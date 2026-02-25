@@ -391,11 +391,7 @@ fn load_pac_script(pac_url: &str) -> Result<String> {
     // Remote URL (http/https)
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         tracing::info!("Downloading PAC file from: {}", trimmed);
-        let response = reqwest::blocking::get(trimmed)
-            .map_err(|e| anyhow::anyhow!("PAC download error from {}: {}", trimmed, e))?;
-        let content = response.text()
-            .map_err(|e| anyhow::anyhow!("PAC content read error from {}: {}", trimmed, e))?;
-        return Ok(content);
+        return download_remote_pac_script(trimmed);
     }
 
     // Local file — convert path
@@ -414,6 +410,25 @@ fn load_pac_script(pac_url: &str) -> Result<String> {
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| anyhow::anyhow!("PAC file read error '{}': {}", file_path, e))?;
     Ok(content)
+}
+
+fn download_remote_pac_script(url: &str) -> Result<String> {
+    let url_owned = url.to_string();
+    let join_handle = std::thread::Builder::new()
+        .name("pac-download".to_string())
+        .spawn(move || -> Result<String> {
+            let response = reqwest::blocking::get(&url_owned)
+                .map_err(|e| anyhow::anyhow!("PAC download error from {}: {}", url_owned, e))?;
+
+            response
+                .text()
+                .map_err(|e| anyhow::anyhow!("PAC content read error from {}: {}", url_owned, e))
+        })
+        .map_err(|e| anyhow::anyhow!("Unable to start PAC download thread: {}", e))?;
+
+    join_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("PAC download thread panicked"))?
 }
 
 // ─── PAC JavaScript evaluation ──────────────────────────────────────────────────────────

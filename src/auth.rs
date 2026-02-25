@@ -4,6 +4,7 @@ use crate::config::HttpAuthProtocol;
 use crate::config::ProxyType;
 use anyhow::Result;
 use base64::Engine;
+use bytes::Bytes;
 use reqwest::header::{HeaderMap, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION};
 use reqwest::{Client, Response, StatusCode};
 
@@ -74,7 +75,11 @@ impl AuthHandler {
         // Timeouts
         client_builder = client_builder
             .timeout(std::time::Duration::from_secs(self.config.socket_timeout))
-            .connect_timeout(std::time::Duration::from_secs(self.config.connect_timeout));
+            .connect_timeout(std::time::Duration::from_secs(self.config.connect_timeout))
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd();
 
         match client_builder.build() {
             Ok(client) => {
@@ -93,11 +98,15 @@ impl AuthHandler {
         client: &Client,
         method: &str,
         url: &str,
+        request_headers: Option<&HeaderMap>,
+        request_body: Option<Bytes>,
     ) -> Result<Response> {
         if self.requires_sspi_handshake() {
             #[cfg(windows)]
             {
-                return self.send_request_with_sspi(client, method, url).await;
+                return self
+                    .send_request_with_sspi(client, method, url, request_headers, request_body)
+                    .await;
             }
 
             #[cfg(not(windows))]
@@ -106,7 +115,9 @@ impl AuthHandler {
             }
         }
 
-        self.send_plain_request(client, method, url, None).await
+        self
+            .send_plain_request(client, method, url, None, request_headers, request_body)
+            .await
     }
 
     pub fn requires_sspi_handshake(&self) -> bool {
@@ -126,10 +137,20 @@ impl AuthHandler {
         method: &str,
         url: &str,
         proxy_auth_header: Option<&str>,
+        request_headers: Option<&HeaderMap>,
+        request_body: Option<Bytes>,
     ) -> Result<Response> {
         let method = reqwest::Method::from_bytes(method.as_bytes())
             .map_err(|_| anyhow::anyhow!("Unsupported HTTP method: {}", method))?;
         let mut request = client.request(method, url);
+
+        if let Some(headers) = request_headers {
+            request = request.headers(headers.clone());
+        }
+
+        if let Some(body) = request_body {
+            request = request.body(body);
+        }
 
         if let Some(value) = proxy_auth_header {
             request = request.header(PROXY_AUTHORIZATION, value);
@@ -144,13 +165,22 @@ impl AuthHandler {
         client: &Client,
         method: &str,
         url: &str,
+        request_headers: Option<&HeaderMap>,
+        request_body: Option<Bytes>,
     ) -> Result<Response> {
         let mut sspi = WindowsSspiContext::new(self.config.http_auth_protocol.clone(), &self.config.proxy_host)?;
         let mut proxy_auth_header: Option<String> = None;
 
         for _ in 0..6 {
             let response = self
-                .send_plain_request(client, method, url, proxy_auth_header.as_deref())
+                .send_plain_request(
+                    client,
+                    method,
+                    url,
+                    proxy_auth_header.as_deref(),
+                    request_headers,
+                    request_body.clone(),
+                )
                 .await?;
 
             if response.status() != StatusCode::PROXY_AUTHENTICATION_REQUIRED {
