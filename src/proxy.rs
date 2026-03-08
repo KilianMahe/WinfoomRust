@@ -6,7 +6,9 @@ use crate::auth::AuthHandler;
 use crate::pac::PacResolver;
 use anyhow::Result;
 use base64::Engine;
+use bytes::Bytes;
 use reqwest::Client;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -18,6 +20,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_socks::tcp::{Socks4Stream, Socks5Stream};
 
 const DNS_NEGATIVE_TTL: Duration = Duration::from_secs(15);
+const MAX_HTTP_HEADER_BYTES: usize = 64 * 1024;
+const MAX_HTTP_BODY_BYTES: usize = 8 * 1024 * 1024;
 
 pub struct ProxyServer {
     config: Arc<Mutex<Config>>,
@@ -222,18 +226,32 @@ impl ProxyServer {
                                     }
                                     
                                     // If not CONNECT, treat as HTTP request
-                                    // Extract method and URI without extra allocations
-                                    let mut parts = first_line.split_whitespace();
-                                    if let (Some(method), Some(uri)) = (parts.next(), parts.next()) {
+                                    let parsed_request = match parse_forward_http_request(
+                                        &mut stream,
+                                        buffer[..n].to_vec(),
+                                    )
+                                    .await
+                                    {
+                                        Ok(req) => req,
+                                        Err(e) => {
+                                            tracing::error!("Invalid HTTP request from {}: {}", client_addr, e);
+                                            let body = format!("Invalid HTTP request: {}", e);
+                                            let response = format!(
+                                                "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                                body.len(),
+                                                body
+                                            );
+                                            let _ = stream.write_all(response.as_bytes()).await;
+                                            let _ = stream.flush().await;
+                                            return;
+                                        }
+                                    };
+
+                                    let method = parsed_request.method.as_str();
+                                    let uri = parsed_request.uri.as_str();
+                                    let url = parsed_request.url.clone();
                                         
                                         tracing::debug!("HTTP request: {} {}", method, uri);
-                                        
-    // Make the direct request
-                                        let url = if uri.starts_with("http://") || uri.starts_with("https://") {
-                                            uri.to_string()
-                                        } else {
-                                            format!("http://{}", uri)
-                                        };
 
                                         let request_config = config.lock().await.clone();
                                         let proxy_candidates = match build_upstream_proxy_candidates(
@@ -295,7 +313,13 @@ impl ProxyServer {
                                             };
 
                                             match auth_handler
-                                                .send_authenticated_request(&client, method, &url)
+                                                .send_authenticated_request(
+                                                    &client,
+                                                    method,
+                                                    &url,
+                                                    Some(&parsed_request.headers),
+                                                    Some(parsed_request.body.clone()),
+                                                )
                                                 .await
                                             {
                                                 Ok(resp) => {
@@ -318,13 +342,25 @@ impl ProxyServer {
                                             // Build the HTTP response
                                             let status = resp.status();
                                             let mut response_str = format!("HTTP/1.1 {}\r\n", status);
-                                            
-                                            // Add important headers
+
                                             for (name, value) in resp.headers() {
+                                                if should_strip_response_header(name.as_str()) {
+                                                    continue;
+                                                }
+
                                                 if let Ok(val) = value.to_str() {
                                                     response_str.push_str(&format!("{}: {}\r\n", name, val));
                                                 }
                                             }
+
+                                            if let Some(content_length) = resp.content_length() {
+                                                response_str.push_str(&format!(
+                                                    "Content-Length: {}\r\n",
+                                                    content_length
+                                                ));
+                                            }
+
+                                            response_str.push_str("Connection: close\r\n");
                                             response_str.push_str("\r\n");
                                             
                                             // Send headers
@@ -354,14 +390,14 @@ impl ProxyServer {
                                                 last_error.unwrap_or_else(|| "No proxy attempt succeeded".to_string())
                                             );
                                             let response = format!(
-                                                "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+                                                "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                                                 body.len(),
                                                 body
                                             );
                                             let _ = stream.write_all(response.as_bytes()).await;
                                             let _ = stream.flush().await;
                                         }
-                                    }
+
                                     return;
                                     }
                                 Ok(Ok(_)) => {
@@ -419,6 +455,185 @@ impl ProxyServer {
 
 }
 
+struct ParsedHttpRequest {
+    method: String,
+    uri: String,
+    url: String,
+    headers: HeaderMap,
+    body: Bytes,
+}
+
+async fn parse_forward_http_request(
+    stream: &mut tokio::net::TcpStream,
+    mut request_bytes: Vec<u8>,
+) -> Result<ParsedHttpRequest> {
+    while find_header_end(&request_bytes).is_none() {
+        if request_bytes.len() > MAX_HTTP_HEADER_BYTES {
+            anyhow::bail!("HTTP headers too large");
+        }
+
+        let mut chunk = vec![0u8; 4096];
+        let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk)).await;
+
+        match read {
+            Ok(Ok(0)) => anyhow::bail!("Connection closed before end of headers"),
+            Ok(Ok(n)) => request_bytes.extend_from_slice(&chunk[..n]),
+            Ok(Err(e)) => return Err(anyhow::anyhow!("Read error while parsing headers: {}", e)),
+            Err(_) => anyhow::bail!("Read timeout while parsing headers"),
+        }
+    }
+
+    let header_end = find_header_end(&request_bytes)
+        .ok_or_else(|| anyhow::anyhow!("Invalid HTTP headers"))?;
+    let header_text = String::from_utf8_lossy(&request_bytes[..header_end]);
+
+    let mut lines = header_text.split("\r\n");
+    let request_line = lines
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Missing request line"))?;
+
+    let mut request_line_parts = request_line.split_whitespace();
+    let method = request_line_parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Missing method"))?
+        .to_string();
+    let uri = request_line_parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Missing URI"))?
+        .to_string();
+
+    let mut content_length: usize = 0;
+    let mut is_chunked = false;
+    let mut host_header: Option<String> = None;
+    let mut headers = HeaderMap::new();
+
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+
+        let (name_raw, value_raw) = match line.split_once(':') {
+            Some(parts) => parts,
+            None => continue,
+        };
+
+        let name = name_raw.trim();
+        let value = value_raw.trim();
+        let name_lower = name.to_ascii_lowercase();
+
+        if name_lower == "host" {
+            host_header = Some(value.to_string());
+        } else if name_lower == "content-length" {
+            content_length = value
+                .parse::<usize>()
+                .map_err(|_| anyhow::anyhow!("Invalid Content-Length"))?;
+        } else if name_lower == "transfer-encoding"
+            && value.to_ascii_lowercase().contains("chunked")
+        {
+            is_chunked = true;
+        }
+
+        if should_strip_request_header(&name_lower) {
+            continue;
+        }
+
+        if let (Ok(header_name), Ok(header_value)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(value),
+        ) {
+            headers.append(header_name, header_value);
+        }
+    }
+
+    if is_chunked {
+        anyhow::bail!("Chunked request bodies are not supported yet");
+    }
+
+    if content_length > MAX_HTTP_BODY_BYTES {
+        anyhow::bail!("HTTP request body too large");
+    }
+
+    let mut available_body = request_bytes.len().saturating_sub(header_end);
+    while available_body < content_length {
+        let mut chunk = vec![0u8; 8192];
+        let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk)).await;
+
+        match read {
+            Ok(Ok(0)) => anyhow::bail!("Connection closed before full body was received"),
+            Ok(Ok(n)) => {
+                request_bytes.extend_from_slice(&chunk[..n]);
+                available_body += n;
+            }
+            Ok(Err(e)) => return Err(anyhow::anyhow!("Read error while parsing body: {}", e)),
+            Err(_) => anyhow::bail!("Read timeout while parsing body"),
+        }
+    }
+
+    let body_start = header_end;
+    let body_end = body_start + content_length;
+    let body = if content_length == 0 {
+        Bytes::new()
+    } else {
+        Bytes::copy_from_slice(&request_bytes[body_start..body_end])
+    };
+
+    let url = if uri.starts_with("http://") || uri.starts_with("https://") {
+        uri.clone()
+    } else if let Some(host) = host_header {
+        if uri.starts_with('/') {
+            format!("http://{}{}", host, uri)
+        } else {
+            format!("http://{}/{}", host, uri)
+        }
+    } else {
+        anyhow::bail!("Cannot build target URL: missing absolute URI and Host header")
+    };
+
+    Ok(ParsedHttpRequest {
+        method,
+        uri,
+        url,
+        headers,
+        body,
+    })
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+}
+
+fn should_strip_request_header(header_name_lower: &str) -> bool {
+    matches!(
+        header_name_lower,
+        "proxy-authorization"
+            | "proxy-connection"
+            | "connection"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "content-length"
+    )
+}
+
+fn should_strip_response_header(header_name_lower: &str) -> bool {
+    matches!(
+        header_name_lower,
+        "connection"
+            | "proxy-connection"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "content-length"
+    )
+}
+
 async fn create_forward_client_for_proxy(
     client_cache: &Mutex<HashMap<String, Client>>,
     config: &Config,
@@ -444,6 +659,10 @@ async fn create_forward_client_for_proxy(
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(config.socket_timeout))
             .connect_timeout(std::time::Duration::from_secs(config.connect_timeout))
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd()
             .build()?
     };
 
