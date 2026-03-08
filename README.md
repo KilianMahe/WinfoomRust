@@ -1,10 +1,10 @@
 # WinfoomRust
 
-> **⚠️ Project under active development — beta version**
+> **Project status: stable release**
 
 HTTP(S) facade proxy in Rust for working with HTTP, SOCKS, and PAC proxies, with a desktop GUI.
 
-Current version: **0.8.0**
+Current version: **1.0.0**
 
 **This project is open source and developed with AI assistance.**
 
@@ -246,7 +246,7 @@ src/
 
 Contributions are welcome via issues and pull requests on GitHub.
 
-This project is in beta testing. Experience feedback and bug reports are especially appreciated.
+If you encounter issues, feedback and bug reports are appreciated.
 
 ## License
 

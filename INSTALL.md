@@ -1,8 +1,8 @@
 # WinfoomRust - Build and Usage Guide
 
-> **⚠️ Project under active development — beta version**
+> **Project status: stable release**
 
-Current version: **0.8.0**
+Current version: **1.0.0**
 
 **This project is open source and developed with AI assistance.**
 
@@ -193,7 +193,7 @@ For any questions or issues:
 - Check the application logs
 - Open an issue on GitHub
 
-This project is in beta testing. Experience feedback and bug reports are especially appreciated.
+If you encounter issues, feedback and bug reports are appreciated.
 
 ## Development Note
 
