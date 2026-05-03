@@ -6,13 +6,28 @@ use crate::tray::{TrayController, TrayEvent};
 use eframe::egui;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as TokioMutex;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProxyRunState {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+}
+
+enum ProxyLifecycleEvent {
+    Started,
+    StartFailed(String),
+    Stopped,
+}
 
 pub struct WinfoomrustApp {
     config: Config,
     proxy_server: Arc<TokioMutex<Option<ProxyServer>>>,
+    run_state: ProxyRunState,
     is_running: bool,
     status_message: String,
     error_message: Arc<Mutex<String>>,
@@ -20,6 +35,8 @@ pub struct WinfoomrustApp {
     runtime: tokio::runtime::Runtime,
     initialized: bool,
     test_result: Arc<Mutex<Option<String>>>,
+    proxy_lifecycle_tx: Sender<ProxyLifecycleEvent>,
+    proxy_lifecycle_rx: Receiver<ProxyLifecycleEvent>,
     _tray_controller: Option<TrayController>,
     tray_events: Option<Receiver<TrayEvent>>,
     tray_initialized: bool,
@@ -36,9 +53,11 @@ struct PacSelectionInfo {
 
 impl WinfoomrustApp {
     pub fn new(config: Config) -> Self {
+        let (proxy_lifecycle_tx, proxy_lifecycle_rx) = mpsc::channel();
         Self {
             config,
             proxy_server: Arc::new(TokioMutex::new(None)),
+            run_state: ProxyRunState::Stopped,
             is_running: false,
             status_message: "Proxy stopped".to_string(),
             error_message: Arc::new(Mutex::new(String::new())),
@@ -46,6 +65,8 @@ impl WinfoomrustApp {
             runtime: tokio::runtime::Runtime::new().unwrap(),
             initialized: false,
             test_result: Arc::new(Mutex::new(None)),
+            proxy_lifecycle_tx,
+            proxy_lifecycle_rx,
             _tray_controller: None,
             tray_events: None,
             tray_initialized: false,
@@ -56,19 +77,17 @@ impl WinfoomrustApp {
     }
 
     fn start_proxy(&mut self) {
+        if self.run_state != ProxyRunState::Stopped {
+            return;
+        }
+
         let config = self.config.clone();
         let proxy_server = Arc::clone(&self.proxy_server);
         let error_msg = Arc::clone(&self.error_message);
-        let unsupported_ntlm_sspi = self.config.http_auth_enabled
-            && !self.config.use_current_credentials
-            && (!self.config.proxy_username.is_empty() || !self.config.proxy_password.is_empty())
-            && matches!(
-                self.config.http_auth_protocol,
-                HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
-            );
-        let unsupported_current_basic = self.config.http_auth_enabled
-            && self.config.use_current_credentials
-            && matches!(self.config.http_auth_protocol, HttpAuthProtocol::BASIC);
+        let lifecycle_tx = self.proxy_lifecycle_tx.clone();
+
+        self.run_state = ProxyRunState::Starting;
+        self.status_message = format!("Starting proxy on port {}...", self.config.local_port);
         
         self.runtime.spawn(async move {
             let mut server = ProxyServer::new(config.clone());
@@ -92,16 +111,19 @@ impl WinfoomrustApp {
                     // Store error for display in the interface
                     let mut err = error_msg.lock().unwrap();
                     *err = error_str;
+                    let _ = lifecycle_tx
+                        .send(ProxyLifecycleEvent::StartFailed("Proxy failed to start".to_string()));
                     return; // Don't mark as running if it fails
                 }
             }
             
             let mut proxy_guard = proxy_server.lock().await;
             *proxy_guard = Some(server);
+            let _ = lifecycle_tx.send(ProxyLifecycleEvent::Started);
         });
         
-        self.is_running = true;
-        if unsupported_ntlm_sspi || unsupported_current_basic {
+        self.run_state = ProxyRunState::Starting;
+        if self.auth_mode_has_known_limitations() {
             self.status_message = format!(
                 "Proxy started on port {} — auth configuration not supported",
                 self.config.local_port
@@ -113,18 +135,94 @@ impl WinfoomrustApp {
     }
 
     fn stop_proxy(&mut self) {
+        if self.run_state != ProxyRunState::Running {
+            return;
+        }
+
         let proxy_server = Arc::clone(&self.proxy_server);
-        
+        let lifecycle_tx = self.proxy_lifecycle_tx.clone();
+
+        self.run_state = ProxyRunState::Stopping;
+        self.status_message = "Stopping proxy...".to_string();
+
         self.runtime.spawn(async move {
             let mut proxy_guard = proxy_server.lock().await;
             if let Some(ref mut server) = *proxy_guard {
                 let _ = server.stop().await;
             }
             *proxy_guard = None;
+            let _ = lifecycle_tx.send(ProxyLifecycleEvent::Stopped);
         });
-        
+    }
+
+    fn shutdown_proxy_blocking(&mut self) {
+        if self.run_state == ProxyRunState::Stopped {
+            return;
+        }
+
+        let proxy_server = Arc::clone(&self.proxy_server);
+        self.runtime.block_on(async move {
+            let mut proxy_guard = proxy_server.lock().await;
+            if let Some(ref mut server) = *proxy_guard {
+                let _ = server.stop().await;
+            }
+            *proxy_guard = None;
+        });
+
+        self.run_state = ProxyRunState::Stopped;
         self.is_running = false;
         self.status_message = "Proxy stopped".to_string();
+    }
+
+    fn request_exit(&mut self, ctx: &egui::Context) {
+        self.allow_exit = true;
+        self.shutdown_proxy_blocking();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    fn controls_locked(&self) -> bool {
+        self.run_state != ProxyRunState::Stopped
+    }
+
+    fn auth_mode_has_known_limitations(&self) -> bool {
+        self.config.http_auth_enabled
+            && ((self.config.use_current_credentials
+                && matches!(
+                    self.config.http_auth_protocol,
+                    HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+                ))
+                || (!self.config.use_current_credentials
+                    && matches!(self.config.http_auth_protocol, HttpAuthProtocol::BASIC)))
+    }
+
+    fn sync_proxy_status_from_events(&mut self) {
+        while let Ok(event) = self.proxy_lifecycle_rx.try_recv() {
+            match event {
+                ProxyLifecycleEvent::Started => {
+                    self.run_state = ProxyRunState::Running;
+                    self.is_running = true;
+                    if self.auth_mode_has_known_limitations() {
+                        self.status_message = format!(
+                            "Proxy started on port {} (HTTPS CONNECT auth limits apply)",
+                            self.config.local_port
+                        );
+                    } else {
+                        self.status_message =
+                            format!("Proxy started on port {}", self.config.local_port);
+                    }
+                }
+                ProxyLifecycleEvent::StartFailed(message) => {
+                    self.run_state = ProxyRunState::Stopped;
+                    self.is_running = false;
+                    self.status_message = message;
+                }
+                ProxyLifecycleEvent::Stopped => {
+                    self.run_state = ProxyRunState::Stopped;
+                    self.is_running = false;
+                    self.status_message = "Proxy stopped".to_string();
+                }
+            }
+        }
     }
 
     async fn test_connection(url: &str, local_port: u16) -> Result<String, String> {
@@ -316,6 +414,7 @@ impl WinfoomrustApp {
 impl eframe::App for WinfoomrustApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut restored_from_tray = false;
+        let mut exit_requested_from_tray = false;
 
         if !self.tray_initialized {
             self.tray_initialized = true;
@@ -341,11 +440,14 @@ impl eframe::App for WinfoomrustApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                     TrayEvent::ExitApp => {
-                        self.allow_exit = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        exit_requested_from_tray = true;
                     }
                 }
             }
+        }
+
+        if exit_requested_from_tray {
+            self.request_exit(ctx);
         }
 
         if !self.allow_exit && !restored_from_tray && ctx.input(|i| i.viewport().close_requested()) {
@@ -366,6 +468,8 @@ impl eframe::App for WinfoomrustApp {
                 self.start_proxy();
             }
         }
+
+        self.sync_proxy_status_from_events();
         
         // Check if test has a result to display
         if let Some(result) = self.test_result.lock().unwrap().take() {
@@ -375,12 +479,7 @@ impl eframe::App for WinfoomrustApp {
         // Check if there's an error message to display
         let error_display = {
             let err = self.error_message.lock().unwrap();
-            let msg = err.clone();
-            if !msg.is_empty() && self.is_running {
-                // Si on a une erreur et qu'on croit qu'on est running, c'est faux
-                self.is_running = false;
-            }
-            msg
+            err.clone()
         };
         // Top menu
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
@@ -423,8 +522,7 @@ impl eframe::App for WinfoomrustApp {
                     ui.separator();
                     
                     if ui.button("Quit").clicked() {
-                        self.allow_exit = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        self.request_exit(ctx);
                     }
                 });
 
@@ -479,15 +577,19 @@ impl eframe::App for WinfoomrustApp {
 
                 // Start/Stop button + Local port
                 ui.horizontal(|ui| {
-                    let button_text = if self.is_running {
+                    let button_text = if self.run_state == ProxyRunState::Running {
                         egui::RichText::new("⏹ Stop proxy").size(16.0)
                     } else {
                         egui::RichText::new("▶ Start proxy").size(16.0)
                     };
                     let button = egui::Button::new(button_text)
                         .min_size(egui::vec2(130.0, 32.0));
-                    if ui.add(button).clicked() {
-                        if self.is_running {
+                    let button_enabled = !matches!(
+                        self.run_state,
+                        ProxyRunState::Starting | ProxyRunState::Stopping
+                    );
+                    if ui.add_enabled(button_enabled, button).clicked() {
+                        if self.run_state == ProxyRunState::Running {
                             self.stop_proxy();
                         } else {
                             self.start_proxy();
@@ -496,7 +598,7 @@ impl eframe::App for WinfoomrustApp {
 
                     ui.add_space(10.0);
 
-                    ui.add_enabled_ui(!self.is_running, |ui| {
+                    ui.add_enabled_ui(!self.controls_locked(), |ui| {
                         ui.label("Port:");
                         ui.add(egui::DragValue::new(&mut self.config.local_port)
                             .speed(1)
@@ -510,7 +612,7 @@ impl eframe::App for WinfoomrustApp {
                 ui.group(|ui| {
                     ui.label("Status:");
                     ui.colored_label(
-                        if self.is_running { 
+                        if self.run_state == ProxyRunState::Running { 
                             egui::Color32::GREEN 
                         } else { 
                             egui::Color32::RED 
@@ -637,7 +739,7 @@ impl eframe::App for WinfoomrustApp {
                 ui.add_space(10.0);
 
                 // Proxy type
-                ui.add_enabled_ui(!self.is_running, |ui| {
+                ui.add_enabled_ui(!self.controls_locked(), |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Proxy type:");
                         ui.add_space(20.0);
@@ -798,6 +900,25 @@ impl eframe::App for WinfoomrustApp {
                                                     "Allow BASIC over unencrypted proxy (unsafe)",
                                                 );
                                             }
+
+                                            ui.add_space(5.0);
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(240, 180, 60),
+                                                "Password is saved in plain text in config.toml.",
+                                            );
+                                        }
+
+                                        if self.config.use_current_credentials
+                                            && matches!(
+                                                self.config.http_auth_protocol,
+                                                HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+                                            )
+                                        {
+                                            ui.add_space(5.0);
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(240, 180, 60),
+                                                "NTLM/Kerberos works for forwarded HTTP requests. HTTPS CONNECT tunnels are not yet supported.",
+                                            );
                                         }
                                     }
                                 });

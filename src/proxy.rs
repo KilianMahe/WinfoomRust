@@ -1,11 +1,9 @@
 // HTTP proxy server
 use crate::config::Config;
-use crate::config::HttpAuthProtocol;
 use crate::config::ProxyType;
 use crate::auth::AuthHandler;
 use crate::pac::PacResolver;
 use anyhow::Result;
-use base64::Engine;
 use bytes::Bytes;
 use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -463,6 +461,11 @@ struct ParsedHttpRequest {
     body: Bytes,
 }
 
+enum ChunkedDecodeState {
+    Incomplete,
+    Complete { body: Vec<u8> },
+}
+
 async fn parse_forward_http_request(
     stream: &mut tokio::net::TcpStream,
     mut request_bytes: Vec<u8>,
@@ -545,36 +548,36 @@ async fn parse_forward_http_request(
         }
     }
 
-    if is_chunked {
-        anyhow::bail!("Chunked request bodies are not supported yet");
-    }
-
-    if content_length > MAX_HTTP_BODY_BYTES {
-        anyhow::bail!("HTTP request body too large");
-    }
-
-    let mut available_body = request_bytes.len().saturating_sub(header_end);
-    while available_body < content_length {
-        let mut chunk = vec![0u8; 8192];
-        let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk)).await;
-
-        match read {
-            Ok(Ok(0)) => anyhow::bail!("Connection closed before full body was received"),
-            Ok(Ok(n)) => {
-                request_bytes.extend_from_slice(&chunk[..n]);
-                available_body += n;
-            }
-            Ok(Err(e)) => return Err(anyhow::anyhow!("Read error while parsing body: {}", e)),
-            Err(_) => anyhow::bail!("Read timeout while parsing body"),
-        }
-    }
-
-    let body_start = header_end;
-    let body_end = body_start + content_length;
-    let body = if content_length == 0 {
-        Bytes::new()
+    let body = if is_chunked {
+        read_chunked_body(stream, &mut request_bytes, header_end).await?
     } else {
-        Bytes::copy_from_slice(&request_bytes[body_start..body_end])
+        if content_length > MAX_HTTP_BODY_BYTES {
+            anyhow::bail!("HTTP request body too large");
+        }
+
+        let mut available_body = request_bytes.len().saturating_sub(header_end);
+        while available_body < content_length {
+            let mut chunk = vec![0u8; 8192];
+            let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk)).await;
+
+            match read {
+                Ok(Ok(0)) => anyhow::bail!("Connection closed before full body was received"),
+                Ok(Ok(n)) => {
+                    request_bytes.extend_from_slice(&chunk[..n]);
+                    available_body += n;
+                }
+                Ok(Err(e)) => return Err(anyhow::anyhow!("Read error while parsing body: {}", e)),
+                Err(_) => anyhow::bail!("Read timeout while parsing body"),
+            }
+        }
+
+        let body_start = header_end;
+        let body_end = body_start + content_length;
+        if content_length == 0 {
+            Bytes::new()
+        } else {
+            Bytes::copy_from_slice(&request_bytes[body_start..body_end])
+        }
     };
 
     let url = if uri.starts_with("http://") || uri.starts_with("https://") {
@@ -603,6 +606,98 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .map(|index| index + 4)
+}
+
+fn find_crlf(buffer: &[u8], start: usize) -> Option<usize> {
+    buffer[start..]
+        .windows(2)
+        .position(|window| window == b"\r\n")
+        .map(|index| start + index)
+}
+
+fn decode_chunked_body_from_buffer(
+    buffer: &[u8],
+    body_start: usize,
+    max_body_bytes: usize,
+) -> Result<ChunkedDecodeState> {
+    let mut cursor = body_start;
+    let mut decoded = Vec::new();
+
+    loop {
+        let line_end = match find_crlf(buffer, cursor) {
+            Some(pos) => pos,
+            None => return Ok(ChunkedDecodeState::Incomplete),
+        };
+
+        let size_line = std::str::from_utf8(&buffer[cursor..line_end])
+            .map_err(|_| anyhow::anyhow!("Invalid chunk size line"))?;
+        let size_hex = size_line
+            .split(';')
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Missing chunk size"))?;
+        let chunk_size = usize::from_str_radix(size_hex, 16)
+            .map_err(|_| anyhow::anyhow!("Invalid chunk size"))?;
+        cursor = line_end + 2;
+
+        if chunk_size == 0 {
+            if buffer.len() >= cursor + 2 && &buffer[cursor..cursor + 2] == b"\r\n" {
+                return Ok(ChunkedDecodeState::Complete { body: decoded });
+            }
+
+            if find_header_end(&buffer[cursor..]).is_some() {
+                return Ok(ChunkedDecodeState::Complete { body: decoded });
+            }
+
+            return Ok(ChunkedDecodeState::Incomplete);
+        }
+
+        let chunk_end = cursor
+            .checked_add(chunk_size)
+            .ok_or_else(|| anyhow::anyhow!("Chunk size overflow"))?;
+        let chunk_crlf_end = chunk_end
+            .checked_add(2)
+            .ok_or_else(|| anyhow::anyhow!("Chunk terminator overflow"))?;
+
+        if chunk_crlf_end > buffer.len() {
+            return Ok(ChunkedDecodeState::Incomplete);
+        }
+
+        if &buffer[chunk_end..chunk_crlf_end] != b"\r\n" {
+            anyhow::bail!("Invalid chunk terminator");
+        }
+
+        decoded.extend_from_slice(&buffer[cursor..chunk_end]);
+        if decoded.len() > max_body_bytes {
+            anyhow::bail!("HTTP request body too large");
+        }
+
+        cursor = chunk_crlf_end;
+    }
+}
+
+async fn read_chunked_body(
+    stream: &mut tokio::net::TcpStream,
+    request_bytes: &mut Vec<u8>,
+    body_start: usize,
+) -> Result<Bytes> {
+    loop {
+        match decode_chunked_body_from_buffer(request_bytes, body_start, MAX_HTTP_BODY_BYTES)? {
+            ChunkedDecodeState::Complete { body } => return Ok(Bytes::from(body)),
+            ChunkedDecodeState::Incomplete => {
+                let mut chunk = vec![0u8; 8192];
+                let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk)).await;
+
+                match read {
+                    Ok(Ok(0)) => anyhow::bail!("Connection closed before full chunked body was received"),
+                    Ok(Ok(n)) => request_bytes.extend_from_slice(&chunk[..n]),
+                    Ok(Err(e)) => return Err(anyhow::anyhow!("Read error while parsing chunked body: {}", e)),
+                    Err(_) => anyhow::bail!("Read timeout while parsing chunked body"),
+                }
+            }
+        }
+    }
 }
 
 fn should_strip_request_header(header_name_lower: &str) -> bool {
@@ -816,7 +911,7 @@ async fn establish_connect_tunnel(
                 .map_err(|e| anyhow::anyhow!(e)),
             Some(url) => {
                 if let Some(upstream) = url.strip_prefix("http://") {
-                    connect_via_http_upstream(config, auth_handler, upstream, target_host_port).await
+                    connect_via_http_upstream(auth_handler, upstream, target_host_port).await
                 } else if let Some(upstream) = url.strip_prefix("socks4://") {
                     connect_via_socks_upstream(config, "socks4", upstream, target_host_port).await
                 } else if let Some(upstream) = url.strip_prefix("socks5://") {
@@ -948,127 +1043,13 @@ fn is_dns_resolution_error(error: &anyhow::Error) -> bool {
 }
 
 async fn connect_via_http_upstream(
-    config: &Config,
     auth_handler: &AuthHandler,
     upstream_host_port: &str,
     target_host_port: &str,
 ) -> Result<tokio::net::TcpStream> {
-    let mut stream = tokio::net::TcpStream::connect(upstream_host_port).await?;
-
-    let mut connect_request = format!(
-        "CONNECT {} HTTP/1.1\r\nHost: {}\r\nProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n",
-        target_host_port,
-        target_host_port
-    );
-
-    if let Some(auth_header) = build_proxy_authorization_header(config, auth_handler)? {
-        connect_request.push_str(&format!("Proxy-Authorization: {}\r\n", auth_header));
-    }
-    connect_request.push_str("\r\n");
-
-    stream.write_all(connect_request.as_bytes()).await?;
-    stream.flush().await?;
-
-    let mut response = Vec::with_capacity(1024);
-    let mut temp = [0u8; 512];
-
-    loop {
-        let n = stream.read(&mut temp).await?;
-        if n == 0 {
-            anyhow::bail!("Connection closed by upstream proxy during CONNECT");
-        }
-        response.extend_from_slice(&temp[..n]);
-
-        if response.windows(4).any(|w| w == b"\r\n\r\n") {
-            break;
-        }
-
-        if response.len() > 32 * 1024 {
-            anyhow::bail!("CONNECT upstream response too large");
-        }
-    }
-
-    let head_end = response
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
-        .unwrap_or(response.len());
-    let head = String::from_utf8_lossy(&response[..head_end]);
-    let status_line = head.lines().next().unwrap_or_default().to_string();
-
-    if !status_line.contains(" 200 ") {
-        anyhow::bail!("CONNECT refused by upstream: {}", status_line);
-    }
-
-    Ok(stream)
-}
-
-fn build_proxy_authorization_header(
-    config: &Config,
-    auth_handler: &AuthHandler,
-) -> Result<Option<String>> {
-    if !config.http_auth_enabled {
-        return Ok(None);
-    }
-
-    if config.use_current_credentials
-        && matches!(config.http_auth_protocol, HttpAuthProtocol::BASIC)
-    {
-        anyhow::bail!(
-            "Current credentials with BASIC is not supported for CONNECT"
-        );
-    }
-
-    if !config.use_current_credentials
-        && matches!(
-            config.http_auth_protocol,
-            HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
-        )
-    {
-        anyhow::bail!(
-            "CONNECT with manual NTLM/Kerberos is not supported"
-        );
-    }
-
-    if config.proxy_username.is_empty()
-        && config.proxy_password.is_empty()
-        && !config.use_current_credentials
-    {
-        return Ok(None);
-    }
-
-    if matches!(config.http_auth_protocol, HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS) {
-        anyhow::bail!(
-            "CONNECT with NTLM/Kerberos upstream is not yet implemented in the raw tunnel"
-        );
-    }
-
-    if matches!(config.http_auth_protocol, HttpAuthProtocol::BASIC)
-        && !config.allow_insecure_basic
-    {
-        anyhow::bail!(
-            "BASIC auth for CONNECT is blocked unless allow_insecure_basic=true"
-        );
-    }
-
-    let (username, password) = if config.use_current_credentials {
-        #[cfg(windows)]
-        {
-            auth_handler.get_windows_credentials()?
-        }
-        #[cfg(not(windows))]
-        {
-            anyhow::bail!("Windows current credentials requested on non-Windows system")
-        }
-    } else {
-        if config.proxy_username.is_empty() {
-            anyhow::bail!("proxy_username missing for CONNECT proxy authentication")
-        }
-        (config.proxy_username.clone(), config.proxy_password.clone())
-    };
-
-    let token = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", username, password));
-    Ok(Some(format!("Basic {}", token)))
+    auth_handler
+        .connect_tunnel_via_http_proxy(upstream_host_port, target_host_port)
+        .await
 }
 
 // Extract host:port from CONNECT line
@@ -1079,4 +1060,44 @@ fn extract_connect_host(request_line: &str) -> Option<&str> {
         return parts.next();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_chunked_body_from_buffer, ChunkedDecodeState, MAX_HTTP_BODY_BYTES};
+
+    fn decode_chunked(raw_body: &[u8]) -> ChunkedDecodeState {
+        decode_chunked_body_from_buffer(raw_body, 0, MAX_HTTP_BODY_BYTES).unwrap()
+    }
+
+    #[test]
+    fn decodes_basic_chunked_body() {
+        let raw = b"4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
+        match decode_chunked(raw) {
+            ChunkedDecodeState::Complete { body } => {
+                assert_eq!(body, b"Wikipedia");
+            }
+            ChunkedDecodeState::Incomplete => panic!("expected complete chunked payload"),
+        }
+    }
+
+    #[test]
+    fn decodes_chunked_body_with_extensions_and_trailers() {
+        let raw = b"5;foo=bar\r\nHello\r\n6\r\n World\r\n0\r\nX-Test: ok\r\n\r\n";
+        match decode_chunked(raw) {
+            ChunkedDecodeState::Complete { body } => {
+                assert_eq!(body, b"Hello World");
+            }
+            ChunkedDecodeState::Incomplete => panic!("expected complete chunked payload"),
+        }
+    }
+
+    #[test]
+    fn reports_incomplete_chunked_body() {
+        let raw = b"4\r\nWiki\r\n5\r\nped";
+        match decode_chunked(raw) {
+            ChunkedDecodeState::Incomplete => {}
+            ChunkedDecodeState::Complete { .. } => panic!("expected incomplete chunked payload"),
+        }
+    }
 }

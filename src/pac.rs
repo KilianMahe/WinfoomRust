@@ -553,11 +553,208 @@ fn register_pac_helpers(context: &mut Context) -> Result<()> {
     register(context, "myIpAddress", 0, pac_my_ip_address)?;
     register(context, "dnsDomainLevels", 1, pac_dns_domain_levels)?;
     register(context, "shExpMatch", 2, pac_sh_exp_match)?;
-    register(context, "weekdayRange", 3, pac_weekday_range)?;
-    register(context, "dateRange", 7, pac_date_range)?;
-    register(context, "timeRange", 7, pac_time_range)?;
     register(context, "alert", 1, pac_alert)?;
+    install_pac_time_helpers(context)?;
 
+    Ok(())
+}
+
+const PAC_TIME_HELPERS_JS: &str = r#"
+const __WINFOOM_WEEKDAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const __WINFOOM_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+
+function __winfoomArray(args) {
+    return Array.prototype.slice.call(args);
+}
+
+function __winfoomMaybeStripGmt(values) {
+    if (values.length === 0) {
+        return { values: values, gmt: false };
+    }
+
+    const last = String(values[values.length - 1]).toUpperCase();
+    if (last === "GMT") {
+        return { values: values.slice(0, values.length - 1), gmt: true };
+    }
+
+    return { values: values, gmt: false };
+}
+
+function __winfoomNow(gmt) {
+    const now = new Date();
+    return {
+        weekday: gmt ? now.getUTCDay() : now.getDay(),
+        day: gmt ? now.getUTCDate() : now.getDate(),
+        month: gmt ? now.getUTCMonth() : now.getMonth(),
+        year: gmt ? now.getUTCFullYear() : now.getFullYear(),
+        hour: gmt ? now.getUTCHours() : now.getHours(),
+        minute: gmt ? now.getUTCMinutes() : now.getMinutes(),
+        second: gmt ? now.getUTCSeconds() : now.getSeconds()
+    };
+}
+
+function __winfoomMonthIndex(value) {
+    const idx = __WINFOOM_MONTHS.indexOf(String(value).toUpperCase());
+    return idx >= 0 ? idx : null;
+}
+
+function __winfoomWeekdayIndex(value) {
+    const idx = __WINFOOM_WEEKDAYS.indexOf(String(value).toUpperCase());
+    return idx >= 0 ? idx : null;
+}
+
+function __winfoomIsYear(value) {
+    return typeof value === "number" && Number.isInteger(value) && value >= 1000;
+}
+
+function __winfoomIsDay(value) {
+    return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 31;
+}
+
+function __winfoomWrapRange(current, start, end) {
+    if (start <= end) {
+        return current >= start && current <= end;
+    }
+
+    return current >= start || current <= end;
+}
+
+function weekdayRange() {
+    const parsed = __winfoomMaybeStripGmt(__winfoomArray(arguments));
+    const values = parsed.values;
+    if (values.length === 0 || values.length > 2) {
+        return false;
+    }
+
+    const start = __winfoomWeekdayIndex(values[0]);
+    const end = values.length === 1 ? start : __winfoomWeekdayIndex(values[1]);
+    if (start === null || end === null) {
+        return false;
+    }
+
+    return __winfoomWrapRange(__winfoomNow(parsed.gmt).weekday, start, end);
+}
+
+function timeRange() {
+    const parsed = __winfoomMaybeStripGmt(__winfoomArray(arguments));
+    const values = parsed.values;
+    if (![1, 2, 4, 6].includes(values.length)) {
+        return false;
+    }
+
+    const now = __winfoomNow(parsed.gmt);
+    const current = now.hour * 3600 + now.minute * 60 + now.second;
+
+    let start;
+    let end;
+    if (values.length === 1) {
+        start = Number(values[0]) * 3600;
+        end = start + 3599;
+    } else if (values.length === 2) {
+        start = Number(values[0]) * 3600;
+        end = Number(values[1]) * 3600 + 3599;
+    } else if (values.length === 4) {
+        start = Number(values[0]) * 3600 + Number(values[1]) * 60;
+        end = Number(values[2]) * 3600 + Number(values[3]) * 60 + 59;
+    } else {
+        start = Number(values[0]) * 3600 + Number(values[1]) * 60 + Number(values[2]);
+        end = Number(values[3]) * 3600 + Number(values[4]) * 60 + Number(values[5]);
+    }
+
+    if (![start, end].every(Number.isFinite)) {
+        return false;
+    }
+
+    return __winfoomWrapRange(current, start, end);
+}
+
+function dateRange() {
+    const parsed = __winfoomMaybeStripGmt(__winfoomArray(arguments));
+    const values = parsed.values;
+    if (![1, 2, 4, 6].includes(values.length)) {
+        return false;
+    }
+
+    const now = __winfoomNow(parsed.gmt);
+    const todayMonthDay = now.month * 100 + now.day;
+    const todayYearMonth = now.year * 100 + (now.month + 1);
+    const todayFull = now.year * 10000 + (now.month + 1) * 100 + now.day;
+
+    if (values.length === 1) {
+        const month = __winfoomMonthIndex(values[0]);
+        if (month !== null) {
+            return now.month === month;
+        }
+        if (__winfoomIsYear(values[0])) {
+            return now.year === Number(values[0]);
+        }
+        if (__winfoomIsDay(values[0])) {
+            return now.day === Number(values[0]);
+        }
+        return false;
+    }
+
+    if (values.length === 2) {
+        const monthStart = __winfoomMonthIndex(values[0]);
+        const monthEnd = __winfoomMonthIndex(values[1]);
+        if (monthStart !== null && monthEnd !== null) {
+            return __winfoomWrapRange(now.month, monthStart, monthEnd);
+        }
+        if (__winfoomIsYear(values[0]) && __winfoomIsYear(values[1])) {
+            return __winfoomWrapRange(now.year, Number(values[0]), Number(values[1]));
+        }
+        if (__winfoomIsDay(values[0]) && __winfoomIsDay(values[1])) {
+            return __winfoomWrapRange(now.day, Number(values[0]), Number(values[1]));
+        }
+        if (__winfoomIsDay(values[0]) && monthStart !== null) {
+            return now.day === Number(values[0]) && now.month === monthStart;
+        }
+        if (monthStart !== null && __winfoomIsYear(values[1])) {
+            return now.month === monthStart && now.year === Number(values[1]);
+        }
+        return false;
+    }
+
+    if (values.length === 4) {
+        const startMonth = __winfoomMonthIndex(values[1]);
+        const endMonth = __winfoomMonthIndex(values[3]);
+        const firstMonth = __winfoomMonthIndex(values[0]);
+        const thirdMonth = __winfoomMonthIndex(values[2]);
+
+        if (__winfoomIsDay(values[0]) && startMonth !== null
+            && __winfoomIsDay(values[2]) && endMonth !== null) {
+            const start = startMonth * 100 + Number(values[0]);
+            const end = endMonth * 100 + Number(values[2]);
+            return __winfoomWrapRange(todayMonthDay, start, end);
+        }
+
+        if (firstMonth !== null && __winfoomIsYear(values[1])
+            && thirdMonth !== null && __winfoomIsYear(values[3])) {
+            const start = Number(values[1]) * 100 + (firstMonth + 1);
+            const end = Number(values[3]) * 100 + (thirdMonth + 1);
+            return __winfoomWrapRange(todayYearMonth, start, end);
+        }
+
+        return false;
+    }
+
+    const startMonth = __winfoomMonthIndex(values[1]);
+    const endMonth = __winfoomMonthIndex(values[4]);
+    if (!__winfoomIsDay(values[0]) || startMonth === null || !__winfoomIsYear(values[2])
+        || !__winfoomIsDay(values[3]) || endMonth === null || !__winfoomIsYear(values[5])) {
+        return false;
+    }
+
+    const start = Number(values[2]) * 10000 + (startMonth + 1) * 100 + Number(values[0]);
+    const end = Number(values[5]) * 10000 + (endMonth + 1) * 100 + Number(values[3]);
+    return __winfoomWrapRange(todayFull, start, end);
+}
+"#;
+
+fn install_pac_time_helpers(context: &mut Context) -> Result<()> {
+    context
+        .eval(Source::from_bytes(PAC_TIME_HELPERS_JS.as_bytes()))
+        .map_err(|e| anyhow::anyhow!("PAC helper runtime error: {}", e))?;
     Ok(())
 }
 
@@ -677,16 +874,19 @@ fn pac_sh_exp_match(_this: &JsValue, args: &[JsValue], context: &mut Context) ->
 }
 
 /// weekdayRange — simplified, always returns true
+#[allow(dead_code)]
 fn pac_weekday_range(_this: &JsValue, _args: &[JsValue], _context: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::Boolean(true))
 }
 
 /// dateRange — simplified, always returns true
+#[allow(dead_code)]
 fn pac_date_range(_this: &JsValue, _args: &[JsValue], _context: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::Boolean(true))
 }
 
 /// timeRange — simplified, always returns true
+#[allow(dead_code)]
 fn pac_time_range(_this: &JsValue, _args: &[JsValue], _context: &mut Context) -> JsResult<JsValue> {
     Ok(JsValue::Boolean(true))
 }
@@ -897,4 +1097,45 @@ fn normalize_url_path(url: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{evaluate_pac_script, parse_pac_result, sh_exp_match};
+
+    fn eval_temporal_guard(expression: &str) -> String {
+        let script = format!(
+            "function FindProxyForURL(url, host) {{ return ({}) ? 'DIRECT' : 'PROXY blocked:8080'; }}",
+            expression
+        );
+
+        evaluate_pac_script(&script, "https://example.com/", "example.com").unwrap()
+    }
+
+    #[test]
+    fn sh_exp_match_supports_wildcards() {
+        assert!(sh_exp_match("intranet.example.com", "*.example.com"));
+        assert!(!sh_exp_match("intranet.example.net", "*.example.com"));
+    }
+
+    #[test]
+    fn parse_pac_result_splits_multiple_entries() {
+        let entries = parse_pac_result("PROXY proxy:8080; DIRECT; SOCKS socks:1080");
+        assert_eq!(entries, vec!["PROXY proxy:8080", "DIRECT", "SOCKS socks:1080"]);
+    }
+
+    #[test]
+    fn weekday_range_helper_is_available() {
+        assert_eq!(eval_temporal_guard("weekdayRange('SUN', 'SAT')"), "DIRECT");
+    }
+
+    #[test]
+    fn date_range_helper_is_available() {
+        assert_eq!(eval_temporal_guard("dateRange('JAN', 'DEC')"), "DIRECT");
+    }
+
+    #[test]
+    fn time_range_helper_is_available() {
+        assert_eq!(eval_temporal_guard("timeRange(0, 23)"), "DIRECT");
+    }
 }

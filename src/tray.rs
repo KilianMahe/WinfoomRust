@@ -182,7 +182,6 @@ unsafe extern "system" fn tray_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
                         MENU_EXIT_ID => {
                             let _ = state.tx.send(TrayEvent::ExitApp);
                             state.wake_ctx.request_repaint();
-                            std::process::exit(0);
                         }
                         _ => {}
                     }

@@ -7,6 +7,8 @@ use base64::Engine;
 use bytes::Bytes;
 use reqwest::header::{HeaderMap, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION};
 use reqwest::{Client, Response, StatusCode};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyAuthMode {
@@ -120,6 +122,45 @@ impl AuthHandler {
             .await
     }
 
+    pub async fn connect_tunnel_via_http_proxy(
+        &self,
+        upstream_host_port: &str,
+        target_host_port: &str,
+    ) -> Result<TcpStream> {
+        let auth_mode = self.auth_mode();
+
+        match auth_mode {
+            ProxyAuthMode::None | ProxyAuthMode::ManualBasic => {
+                let auth_header = self.basic_proxy_authorization_header()?;
+                self.send_connect_request(upstream_host_port, target_host_port, auth_header.as_deref())
+                    .await
+            }
+            ProxyAuthMode::WindowsCurrentCredentials => {
+                if self.requires_sspi_handshake() {
+                    #[cfg(windows)]
+                    {
+                        self.send_connect_request_with_sspi(upstream_host_port, target_host_port)
+                            .await
+                    }
+
+                    #[cfg(not(windows))]
+                    {
+                        anyhow::bail!("SSPI handshake not available outside Windows");
+                    }
+                } else {
+                    anyhow::bail!(
+                        "Windows current credentials require NTLM/Kerberos with SSPI"
+                    );
+                }
+            }
+            ProxyAuthMode::UnsupportedNtlmSspi => {
+                anyhow::bail!(
+                    "CONNECT with manual NTLM/Kerberos is not supported. Use Windows current credentials."
+                );
+            }
+        }
+    }
+
     pub fn requires_sspi_handshake(&self) -> bool {
         self.config.http_auth_enabled
             && cfg!(windows)
@@ -157,6 +198,46 @@ impl AuthHandler {
         }
 
         Ok(request.send().await?)
+    }
+
+    async fn send_connect_request(
+        &self,
+        upstream_host_port: &str,
+        target_host_port: &str,
+        proxy_auth_header: Option<&str>,
+    ) -> Result<TcpStream> {
+        let mut stream = TcpStream::connect(upstream_host_port).await?;
+        self.write_connect_request(&mut stream, target_host_port, proxy_auth_header)
+            .await?;
+
+        let (status_line, _) = read_http_response_headers(&mut stream).await?;
+        if !status_line.contains(" 200 ") {
+            anyhow::bail!("CONNECT refused by upstream: {}", status_line);
+        }
+
+        Ok(stream)
+    }
+
+    async fn write_connect_request(
+        &self,
+        stream: &mut TcpStream,
+        target_host_port: &str,
+        proxy_auth_header: Option<&str>,
+    ) -> Result<()> {
+        let mut connect_request = format!(
+            "CONNECT {} HTTP/1.1\r\nHost: {}\r\nProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n",
+            target_host_port,
+            target_host_port
+        );
+
+        if let Some(auth_header) = proxy_auth_header {
+            connect_request.push_str(&format!("Proxy-Authorization: {}\r\n", auth_header));
+        }
+        connect_request.push_str("\r\n");
+
+        stream.write_all(connect_request.as_bytes()).await?;
+        stream.flush().await?;
+        Ok(())
     }
 
     #[cfg(windows)]
@@ -208,6 +289,53 @@ impl AuthHandler {
         anyhow::bail!(
             "SSPI handshake failed after multiple attempts (persistent 407)"
         )
+    }
+
+    #[cfg(windows)]
+    async fn send_connect_request_with_sspi(
+        &self,
+        upstream_host_port: &str,
+        target_host_port: &str,
+    ) -> Result<TcpStream> {
+        let mut stream = TcpStream::connect(upstream_host_port).await?;
+        let mut sspi =
+            WindowsSspiContext::new(self.config.http_auth_protocol.clone(), &self.config.proxy_host)?;
+        let mut proxy_auth_header: Option<String> = None;
+
+        for _ in 0..6 {
+            self.write_connect_request(&mut stream, target_host_port, proxy_auth_header.as_deref())
+                .await?;
+
+            let (status_line, headers) = read_http_response_headers(&mut stream).await?;
+            if status_line.contains(" 200 ") {
+                return Ok(stream);
+            }
+
+            if !status_line.contains(" 407 ") {
+                anyhow::bail!("CONNECT refused by upstream: {}", status_line);
+            }
+
+            let challenge = extract_proxy_auth_challenge(&headers, sspi.header_scheme());
+            if challenge.is_none() {
+                anyhow::bail!(
+                    "Proxy did not return a {} challenge (Proxy-Authenticate)",
+                    sspi.header_scheme()
+                );
+            }
+
+            let output_token = sspi.next_token(challenge.as_deref())?;
+            if output_token.is_empty() {
+                anyhow::bail!("SSPI produced an empty token during CONNECT handshake");
+            }
+
+            proxy_auth_header = Some(format!(
+                "{} {}",
+                sspi.header_scheme(),
+                base64::engine::general_purpose::STANDARD.encode(output_token)
+            ));
+        }
+
+        anyhow::bail!("SSPI CONNECT handshake failed after multiple attempts (persistent 407)")
     }
 
     pub fn auth_mode(&self) -> ProxyAuthMode {
@@ -295,39 +423,45 @@ impl AuthHandler {
         Ok(())
     }
 
-    #[cfg(windows)]
-    pub fn get_windows_credentials(&self) -> Result<(String, String)> {
-        let username = if !self.config.proxy_username.is_empty() {
-            self.config.proxy_username.clone()
-        } else {
-            let user = std::env::var("USERNAME").unwrap_or_default();
-            let domain = std::env::var("USERDOMAIN").unwrap_or_default();
+    fn basic_proxy_authorization_header(&self) -> Result<Option<String>> {
+        if !self.config.http_auth_enabled {
+            return Ok(None);
+        }
 
-            if user.is_empty() {
-                anyhow::bail!("USERNAME not found in environment");
-            }
-
-            if domain.is_empty() {
-                user
-            } else {
-                format!("{}\\{}", domain, user)
-            }
-        };
-
-        let password = if !self.config.proxy_password.is_empty() {
-            self.config.proxy_password.clone()
-        } else {
-            std::env::var("WINFOOM_PROXY_PASSWORD").unwrap_or_default()
-        };
-
-        if password.is_empty() {
+        if self.config.use_current_credentials
+            && matches!(self.config.http_auth_protocol, HttpAuthProtocol::BASIC)
+        {
             anyhow::bail!(
-                "WindowsCurrentCredentials mode: password not found. Set proxy_password or WINFOOM_PROXY_PASSWORD"
+                "Current credentials with BASIC is not supported. Use NTLM/Kerberos or manual BASIC credentials."
             );
         }
 
-        Ok((username, password))
+        if matches!(
+            self.config.http_auth_protocol,
+            HttpAuthProtocol::NTLM | HttpAuthProtocol::KERBEROS
+        ) {
+            return Ok(None);
+        }
+
+        if self.config.proxy_username.trim().is_empty() {
+            anyhow::bail!("proxy_username is required for BASIC authentication");
+        }
+
+        if self.config.proxy_password.is_empty() {
+            anyhow::bail!("proxy_password is required for BASIC authentication");
+        }
+
+        if !self.config.allow_insecure_basic {
+            anyhow::bail!(
+                "BASIC auth for CONNECT is blocked unless allow_insecure_basic=true"
+            );
+        }
+
+        let token = base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{}", self.config.proxy_username, self.config.proxy_password));
+        Ok(Some(format!("Basic {}", token)))
     }
+
 }
 
 fn extract_proxy_auth_challenge(headers: &HeaderMap, scheme: &str) -> Option<Vec<u8>> {
@@ -359,6 +493,58 @@ fn extract_proxy_auth_challenge(headers: &HeaderMap, scheme: &str) -> Option<Vec
     }
 
     None
+}
+
+async fn read_http_response_headers(stream: &mut TcpStream) -> Result<(String, HeaderMap)> {
+    let mut response = Vec::with_capacity(1024);
+    let mut temp = [0u8; 512];
+
+    loop {
+        let n = stream.read(&mut temp).await?;
+        if n == 0 {
+            anyhow::bail!("Connection closed by upstream proxy while waiting for response");
+        }
+        response.extend_from_slice(&temp[..n]);
+
+        if response.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+
+        if response.len() > 32 * 1024 {
+            anyhow::bail!("Upstream proxy response headers too large");
+        }
+    }
+
+    let head_end = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .map(|p| p + 4)
+        .ok_or_else(|| anyhow::anyhow!("Invalid upstream proxy response"))?;
+    let head = String::from_utf8_lossy(&response[..head_end]);
+    let mut lines = head.split("\r\n");
+    let status_line = lines.next().unwrap_or_default().to_string();
+    let mut headers = HeaderMap::new();
+
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+
+        let Some((name_raw, value_raw)) = line.split_once(':') else {
+            continue;
+        };
+
+        let name = name_raw.trim();
+        let value = value_raw.trim();
+        if let (Ok(header_name), Ok(header_value)) = (
+            reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+            reqwest::header::HeaderValue::from_str(value),
+        ) {
+            headers.append(header_name, header_value);
+        }
+    }
+
+    Ok((status_line, headers))
 }
 
 #[cfg(windows)]

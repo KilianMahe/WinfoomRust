@@ -42,11 +42,12 @@ The application exposes a local proxy (default `127.0.0.1:3129`) and relays requ
 - Built-in PAC evaluation:
   - Embedded JavaScript engine (`boa_engine`) — **no native dependencies required**
   - Support for local PAC files (`C:\...\proxy.pac`, `file:///...`) and remote ones (`http://...`)
-  - Full implementation of standard PAC functions (`FindProxyForURL`, `shExpMatch`, `dnsDomainIs`, `isInNet`, `dnsResolve`, `myIpAddress`, etc.)
+  - Support for standard PAC helpers including temporal ranges (`weekdayRange`, `dateRange`, `timeRange`)
   - Cache with configurable TTL and stale-while-revalidate mechanism
 - HTTP Auth:
   - Manual `BASIC`: supported
-  - `NTLM` / `KERBEROS` + `use_current_credentials = true` (Windows): supported
+  - `NTLM` / `KERBEROS` + `use_current_credentials = true` (Windows): supported for forwarded HTTP requests
+  - `NTLM` / `KERBEROS` over HTTPS `CONNECT`: not yet supported
   - `NTLM` / `KERBEROS` with manual credentials: not supported
 - `egui` graphical interface
 - Windows notification area (tray):
@@ -142,6 +143,8 @@ The configuration file is saved automatically:
 - Windows: `%APPDATA%\winfoom-rust\config.toml`
 - Linux/macOS: `~/.config/winfoom-rust/config.toml`
 
+Warning: manual proxy passwords are currently stored in plain text in `config.toml`.
+
 Example:
 
 ```toml
@@ -205,6 +208,7 @@ RUST_LOG=debug cargo run --release
 - Check the protocol (`BASIC`, `NTLM`, `KERBEROS`)
 - Check the credentials mode (`use_current_credentials`)
 - `BASIC` is blocked over unencrypted proxies unless `allow_insecure_basic = true`
+- `NTLM` / `KERBEROS` currently covers forwarded HTTP requests, not HTTPS `CONNECT` tunnels
 - Reminder: manual NTLM/Kerberos is not supported
 
 ### Compilation errors
@@ -240,7 +244,7 @@ src/
 - Harden compatibility across multi-proxy environments
 - Extend test coverage
 - Improve binary distribution (packaging)
-- Fully implement temporal PAC functions (`weekdayRange`, `dateRange`, `timeRange`)
+- Add chunked request body forwarding
 
 ## Contributing
 
